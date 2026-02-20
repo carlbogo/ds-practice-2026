@@ -42,7 +42,7 @@ def _looks_like_real_name(name):
         if token_lower in blocked_tokens:
             return False
         # 2 letter minimum, only letters, hyphens, apostrophes, spaces
-        if not re.fullmatch(r"[A-Za-z][A-Za-z'- ]{1,}", token):
+        if not re.fullmatch(r"[A-Za-z][A-Za-z'\- ]{1,}", token):
             return False
 
     return True
@@ -80,9 +80,9 @@ def _looks_like_real_address(street, city, state, zip_code, country):
     zip_clean = zip_code.strip()
     country_clean = country.strip()
 
-    if len(city_clean) < 2 or not re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,}", city_clean):
+    if len(city_clean) < 2 or not re.fullmatch(r"[A-Za-z][A-Za-z \.'\-]{1,}", city_clean):
         return False
-    if len(state_clean) < 2 or not re.fullmatch(r"[A-Za-z][A-Za-z .'-]{1,}", state_clean):
+    if len(state_clean) < 2 or not re.fullmatch(r"[A-Za-z][A-Za-z \.'\-]{1,}", state_clean):
         return False
 
     if not re.fullmatch(r"[A-Za-z0-9 -]{3,10}", zip_clean):
