@@ -66,6 +66,34 @@
                 <input type="checkbox" id="terms" name="terms" checked required class="mr-2 border border-gray-300 rounded">
                 <label for="terms" class="text-sm font-medium text-gray-700">Accept Terms and Conditions</label>
             </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    Book Suggestions
+                </label>
+
+                <div class="flex items-center space-x-6">
+                    <label class="flex items-center">
+                        <input
+                                type="radio"
+                                name="suggestionMode"
+                                value="author"
+                                checked
+                                class="mr-2"
+                        >
+                        By Author
+                    </label>
+
+                    <label class="flex items-center">
+                        <input
+                                type="radio"
+                                name="suggestionMode"
+                                value="ai"
+                                class="mr-2"
+                        >
+                        By AI
+                    </label>
+                </div>
+            </div>
             <button type="submit" class="w-full bg-blue-600 text-white font-medium py-2 px-4 rounded-lg hover:bg-blue-700">Submit Order</button>
         </form>
 
@@ -123,6 +151,7 @@
                 shippingMethod: formData.get('shippingMethod'),
                 giftWrapping: formData.get('giftWrapping') === 'on',
                 termsAccepted: formData.get('terms') === 'on',
+                suggestionMode: formData.get('suggestionMode')
             };
 
             try {

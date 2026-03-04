@@ -9,6 +9,7 @@ service SuggestionsService {
 message SuggestionsRequest {
   string transaction_id = 1;
   repeated string purchased_books = 2;
+  string mode = 3;
 }
 
 message SuggestionsResponse {

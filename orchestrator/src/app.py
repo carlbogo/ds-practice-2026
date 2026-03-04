@@ -186,10 +186,12 @@ def get_suggestions(checkout_data, correlation_id):
     items = checkout_data.get("items", [])
 
     purchased_books = [item.get("name", "") for item in items]
+    mode = checkout_data.get("suggestionMode", "author")
 
     request_message = suggestions.SuggestionsRequest(
         transaction_id=checkout_data.get("orderId", ""),
         purchased_books=purchased_books,
+        mode=mode
     )
 
     rpc_start = time.perf_counter()
