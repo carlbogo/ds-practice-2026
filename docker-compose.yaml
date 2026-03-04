@@ -76,12 +76,16 @@ services:
     build:
       context: ./
       dockerfile: ./suggestions/Dockerfile
+    env_file:
+      - .env
     ports:
       - 50053:50053
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/suggestions/src/app.py
       - PYTHONPATH=/app
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=llama-3.3-70b-versatile
     volumes:
       - ./utils:/app/utils
       - ./suggestions/src:/app/suggestions/src
