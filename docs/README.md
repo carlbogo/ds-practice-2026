@@ -9,6 +9,34 @@ This repository contains the initial code for the practice sessions of the Distr
 The code consists of multiple services. Each service is located in a separate folder. The `frontend` service folder contains a Dockerfile and the code for an example bookstore application. Each backend service folder (e.g. `orchestrator` or `fraud_detection`) contains a Dockerfile, a requirements.txt file and the source code of the service. During the practice sessions, you will implement the missing functionality in these backend services, or extend the backend with new services.
 
 There is also a `utils` folder that contains some helper code or specifications that are used by multiple services. Check the `utils` folder for more information.
+### System diagram
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Orchestrator
+    participant Verification
+    participant Fraud
+    participant Suggestions
+
+    User->>Frontend: Submit order
+    Frontend->>Orchestrator: POST /checkout
+
+    par Parallel gRPC Calls
+        Orchestrator->>Verification: VerifyTransaction
+        Orchestrator->>Fraud: DetectFraud
+        Orchestrator->>Suggestions: GetSuggestions
+    end
+
+    Verification-->>Orchestrator: is_valid / reasons
+    Fraud-->>Orchestrator: is_fraud / reasons
+    Suggestions-->>Orchestrator: suggested_books
+
+    Orchestrator->>Orchestrator: Decision logic
+
+    Orchestrator-->>Frontend: Approved or Rejected
+    Frontend-->>User: Display result
+```
 
 ### Setting up the Groq API Key
 
