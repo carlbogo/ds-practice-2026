@@ -209,11 +209,14 @@ class SuggestionsService(suggestions_pb2_grpc.SuggestionsServiceServicer):
 
         try:
 
-            # Try LLM suggestions first
-            prompt = _generate_prompt()
-            llm_response = _call_groq(prompt)
+            mode = request.mode or "author"
 
-            suggestions_list = _parse_books(llm_response)
+            if mode == "ai":
+                prompt = _generate_prompt()
+                llm_response = _call_groq(prompt)
+                suggestions_list = _parse_books(llm_response)
+            else:
+                suggestions_list = []
 
             if not suggestions_list:
                 logger.info(
