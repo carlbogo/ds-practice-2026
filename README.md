@@ -10,6 +10,28 @@ The code consists of multiple services. Each service is located in a separate fo
 
 There is also a `utils` folder that contains some helper code or specifications that are used by multiple services. Check the `utils` folder for more information.
 
+### Setting up the Groq API Key
+
+The `suggestions` service uses Groq AI to generate book recommendations. To use this service, you need to obtain a Groq API key:
+
+1. **Get a Groq API Key:**
+   - Go to [https://console.groq.com/](https://console.groq.com/)
+   - Sign up for a free account
+   - Navigate to API Keys section
+   - Create a new API key and copy it
+
+2. **Create a `.env` file:**
+   - In the root directory of the repository, create a file named `.env`
+   - Add your Groq API key to the file:
+   ```
+   GROQ_API_KEY=your_api_key_here
+   ```
+   - Replace `your_api_key_here` with your actual API key
+
+3. **The `.env` file is already configured in `docker-compose.yaml`** and will be automatically loaded by the suggestions service.
+
+**Note:** The `.env` file should never be committed to version control (it's already in `.gitignore`). Each team member should create their own `.env` file with their own API key.
+
 ### Running the code with Docker Compose [recommended]
 
 To run the code, you need to clone this repository, make sure you have Docker and Docker Compose installed, and run the following command in the root folder of the repository:
