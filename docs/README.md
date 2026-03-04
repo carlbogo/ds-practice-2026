@@ -10,34 +10,7 @@ The code consists of multiple services. Each service is located in a separate fo
 
 There is also a `utils` folder that contains some helper code or specifications that are used by multiple services. Check the `utils` folder for more information.
 ### System diagram
-```mermaid
-sequenceDiagram
-    participant User
-    participant Frontend
-    participant Orchestrator
-    participant Verification
-    participant Fraud
-    participant Suggestions
-
-    User->>Frontend: Submit order
-    Frontend->>Orchestrator: POST /checkout
-
-    par Parallel gRPC Calls
-        Orchestrator->>Verification: VerifyTransaction
-        Orchestrator->>Fraud: DetectFraud
-        Orchestrator->>Suggestions: GetSuggestions
-    end
-
-    Verification-->>Orchestrator: is_valid / reasons
-    Fraud-->>Orchestrator: is_fraud / reasons
-    Suggestions-->>Orchestrator: suggested_books
-
-    Orchestrator->>Orchestrator: Decision logic
-
-    Orchestrator-->>Frontend: Approved or Rejected
-    Frontend-->>User: Display result
-```
-
+![img.png](img.png)
 ### Setting up the Groq API Key
 
 The `suggestions` service uses Groq AI to generate book recommendations. To use this service, you need to obtain a Groq API key:
