@@ -3,7 +3,11 @@ syntax = "proto3";
 package transaction_verification;
 
 service TransactionVerificationService {
-    rpc VerifyTransaction(TransactionVerificationRequest) returns (TransactionVerificationResponse);
+    rpc InitOrder(InitOrderRequest) returns (InitOrderResponse);
+    rpc CheckItems(TransactionEventRequest) returns (TransactionEventResponse);
+    rpc CheckUserAndBillingData(TransactionEventRequest) returns (TransactionEventResponse);
+    rpc CheckPaymentData(TransactionEventRequest) returns (TransactionEventResponse);
+    rpc FinalizeOrder(FinalizeOrderRequest) returns (FinalizeOrderResponse);
 }
 
 message Item {
@@ -11,8 +15,8 @@ message Item {
     int32 quantity = 2;
 }
 
-message TransactionVerificationRequest {
-    string transaction_id = 1;
+message InitOrderRequest {
+    string order_id = 1;
     string purchaser_name = 2;
     string purchaser_email = 3;
     string credit_card_number = 4;
@@ -24,10 +28,29 @@ message TransactionVerificationRequest {
     string billing_zip = 10;
     string billing_country = 11;
     repeated Item items = 12;
-    bool terms_accepted = 13;
 }
 
-message TransactionVerificationResponse {
+message InitOrderResponse {
+    bool ok = 1;
+    repeated int32 vc = 2;
+}
+
+message TransactionEventRequest {
+    string order_id = 1;
+    repeated int32 vc = 2;
+}
+
+message TransactionEventResponse {
     bool is_valid = 1;
     repeated string reasons = 2;
+    repeated int32 vc = 3;
+}
+
+message FinalizeOrderRequest {
+    string order_id = 1;
+    repeated int32 vc = 2;
+}
+
+message FinalizeOrderResponse {
+    bool ok = 1;
 }

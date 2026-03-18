@@ -3,11 +3,8 @@ import os
 import logging
 import time
 import random
+import threading
 from datetime import datetime
-from concurrent import futures
-
-import grpc
-from groq import Groq
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 suggestions_grpc_path = os.path.abspath(
@@ -15,19 +12,18 @@ suggestions_grpc_path = os.path.abspath(
 )
 sys.path.insert(0, suggestions_grpc_path)
 
-import suggestions_pb2
-import suggestions_pb2_grpc
+import suggestions_pb2 as suggestions
+import suggestions_pb2_grpc as suggestions_grpc
+import grpc
+from concurrent import futures
+from groq import Groq
 
 logging.basicConfig(
     level=logging.INFO,
     format="===LOG=== %(asctime)s %(levelname)s %(name)s %(message)s",
 )
+
 logger = logging.getLogger("suggestions")
-
-
-# -------------------------------------------------------------------
-# Static fallback book list
-# -------------------------------------------------------------------
 
 ALL_BOOKS = [
     "1 x 1 = 2: The Terrence Howard Mathematical Revolution",
@@ -45,11 +41,6 @@ ALL_BOOKS = [
     "Sacred Geometry and Cosmic Energy",
     "The Vibrational Frequency of the Universe",
 ]
-
-
-# -------------------------------------------------------------------
-# Groq Configuration
-# -------------------------------------------------------------------
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -76,10 +67,6 @@ def _initialize_groq_client():
         return None
 
 
-# -------------------------------------------------------------------
-# Random fallback suggestions
-# -------------------------------------------------------------------
-
 def _random_suggestions(purchased):
     available = [b for b in ALL_BOOKS if b not in purchased]
 
@@ -88,10 +75,6 @@ def _random_suggestions(purchased):
 
     return available
 
-
-# -------------------------------------------------------------------
-# Prompt generation
-# -------------------------------------------------------------------
 
 def _generate_prompt():
     now = datetime.now()
@@ -123,15 +106,10 @@ Example:
 1. The Great Gatsby - F. Scott Fitzgerald - 1925
 2. 1984 - George Orwell - 1949
 3. To Kill a Mockingbird - Harper Lee - 1960
-"""
+""".strip()
 
-
-# -------------------------------------------------------------------
-# LLM call
-# -------------------------------------------------------------------
 
 def _call_groq(prompt):
-
     client = _initialize_groq_client()
     if not client:
         return None
@@ -139,9 +117,8 @@ def _call_groq(prompt):
     try:
         chat_completion = client.chat.completions.create(
             messages=[
-                {"role": "system",
-                 "content": "You are a book recommendation assistant."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "You are a book recommendation assistant."},
+                {"role": "user", "content": prompt},
             ],
             model=GROQ_MODEL,
             temperature=0.7,
@@ -155,19 +132,13 @@ def _call_groq(prompt):
         return None
 
 
-# -------------------------------------------------------------------
-# Parse LLM response
-# -------------------------------------------------------------------
-
 def _parse_books(text):
-
     if not text:
         return []
 
     books = []
 
     for line in text.split("\n"):
-
         line = line.strip()
 
         for prefix in ["1.", "2.", "3.", "-", "*", "•"]:
@@ -183,32 +154,91 @@ def _parse_books(text):
     return books
 
 
-# -------------------------------------------------------------------
-# gRPC Service
-# -------------------------------------------------------------------
+class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
 
-class SuggestionsService(suggestions_pb2_grpc.SuggestionsServiceServicer):
+    def __init__(self):
+        # Vector clock layout: [transaction_verification, fraud_detection, suggestions]
+        self.svc_idx = int(os.getenv("SUGGESTIONS_SERVICE_INDEX", "2"))
+        self.total_svcs = int(os.getenv("VECTOR_CLOCK_SIZE", "3"))
 
-    def GetSuggestions(self, request, context):
+        # order_id -> state
+        self.orders = {}
+        self.lock = threading.Lock()
 
-        started = time.perf_counter()
+    def _normalize_vc(self, incoming_vc):
+        vc = list(incoming_vc or [])
 
-        metadata = dict(context.invocation_metadata())
-        cid = metadata.get(
-            "x-correlation-id",
-            request.transaction_id or "unknown"
-        )
+        if len(vc) < self.total_svcs:
+            vc.extend([0] * (self.total_svcs - len(vc)))
+        elif len(vc) > self.total_svcs:
+            vc = vc[:self.total_svcs]
 
-        purchased = list(request.purchased_books)
+        return vc
 
-        logger.info(
-            "cid=%s event=request_received purchased=%s",
-            cid,
-            len(purchased),
-        )
+    def _merge_and_increment(self, local_vc, incoming_vc):
+        incoming_vc = self._normalize_vc(incoming_vc)
+
+        for i in range(self.total_svcs):
+            local_vc[i] = max(local_vc[i], incoming_vc[i])
+
+        local_vc[self.svc_idx] += 1
+
+    def _get_order_or_not_found(self, order_id, context):
+        entry = self.orders.get(order_id)
+
+        if entry is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"Order '{order_id}' not initialized")
+
+        return entry
+
+    def InitOrder(self, request, context):
+        order_id = request.order_id or "unknown"
 
         try:
+            with self.lock:
+                entry = {
+                    "order_id": request.order_id,
+                    "vc": [0] * self.total_svcs,
+                }
 
+                entry["vc"][self.svc_idx] += 1
+                self.orders[request.order_id] = entry
+
+                vc_snapshot = entry["vc"][:]
+
+            return suggestions.InitOrderResponse(
+                ok=True,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=init_order_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during suggestions order initialization")
+
+            return suggestions.InitOrderResponse(
+                ok=False,
+                vc=[0] * self.total_svcs,
+            )
+
+    def GetSuggestions(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self._get_order_or_not_found(request.order_id, context)
+
+                if entry is None:
+                    return suggestions.SuggestionsResponse(
+                        suggested_books=[],
+                        vc=[0] * self.total_svcs,
+                    )
+
+                self._merge_and_increment(entry["vc"], request.vc)
+                vc_snapshot = entry["vc"][:]
+
+            purchased = list(request.purchased_books)
             mode = request.mode or "author"
 
             if mode == "ai":
@@ -219,62 +249,69 @@ class SuggestionsService(suggestions_pb2_grpc.SuggestionsServiceServicer):
                 suggestions_list = []
 
             if not suggestions_list:
-                logger.info(
-                    "cid=%s event=fallback_random_suggestions",
-                    cid,
-                )
+                logger.info("event=fallback_random_suggestions cid=%s", order_id)
                 suggestions_list = _random_suggestions(purchased)
 
-            latency_ms = (time.perf_counter() - started) * 1000
-
-            logger.info(
-                "cid=%s event=suggestions_generated latency_ms=%.2f suggestions=%s",
-                cid,
-                latency_ms,
-                suggestions_list,
-            )
-
-            return suggestions_pb2.SuggestionsResponse(
-                suggested_books=suggestions_list
+            return suggestions.SuggestionsResponse(
+                suggested_books=suggestions_list,
+                vc=vc_snapshot,
             )
 
         except Exception:
-
-            logger.exception("cid=%s unexpected_error", cid)
-
+            logger.exception("event=get_suggestions_exception cid=%s", order_id)
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details("Suggestion generation failed")
+            context.set_details("Internal error during suggestions generation")
 
-            return suggestions_pb2.SuggestionsResponse(
-                suggested_books=[]
+            return suggestions.SuggestionsResponse(
+                suggested_books=[],
+                vc=[0] * self.total_svcs,
+            )
+
+    def FinalizeOrder(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self.orders.get(request.order_id)
+
+                if entry is not None:
+                    self._merge_and_increment(entry["vc"], request.vc)
+                    vc_snapshot = entry["vc"][:]
+                    del self.orders[request.order_id]
+                else:
+                    vc_snapshot = self._normalize_vc(request.vc)
+
+            return suggestions.FinalizeOrderResponse(
+                ok=True,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=finalize_order_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during suggestions order finalization")
+
+            return suggestions.FinalizeOrderResponse(
+                ok=False,
+                vc=[0] * self.total_svcs,
             )
 
 
-# -------------------------------------------------------------------
-# Server
-# -------------------------------------------------------------------
-
 def serve():
-
-    logger.info("Starting suggestions service")
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
 
     _initialize_groq_client()
 
-    server = grpc.server(
-        futures.ThreadPoolExecutor(max_workers=10)
-    )
-
-    suggestions_pb2_grpc.add_SuggestionsServiceServicer_to_server(
+    suggestions_grpc.add_SuggestionsServiceServicer_to_server(
         SuggestionsService(),
-        server
+        server,
     )
 
     port = "50053"
+    server.add_insecure_port("[::]:" + port)
 
-    server.add_insecure_port(f"[::]:{port}")
     server.start()
-
-    logger.info("Server running on port %s", port)
+    logger.info("Server started. Listening on port %s.", port)
 
     server.wait_for_termination()
 

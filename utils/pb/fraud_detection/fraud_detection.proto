@@ -3,16 +3,40 @@ syntax = "proto3";
 package fraud_detection;
 
 service FraudDetectionService {
-    rpc DetectFraud(FraudDetectionRequest) returns (FraudDetectionResponse);
+    rpc InitOrder(InitOrderRequest) returns (InitOrderResponse);
+    rpc CheckCardFraud(FraudEventRequest) returns (FraudEventResponse);
+    rpc CheckEmailFraud(FraudEventRequest) returns (FraudEventResponse);
+    rpc CheckRiskScoreFraud(FraudEventRequest) returns (FraudEventResponse);
+    rpc FinalizeOrder(FinalizeOrderRequest) returns (FinalizeOrderResponse);
 }
 
-message FraudDetectionRequest {
-    string transaction_id = 1;
+message InitOrderRequest {
+    string order_id = 1;
     string purchaser_email = 2;
     string credit_card_number = 3;
 }
 
-message FraudDetectionResponse {
+message InitOrderResponse {
+    bool ok = 1;
+    repeated int32 vc = 2;
+}
+
+message FraudEventRequest {
+    string order_id = 1;
+    repeated int32 vc = 2;
+}
+
+message FraudEventResponse {
     bool is_fraud = 1;
     repeated string reasons = 2;
+    repeated int32 vc = 3;
+}
+
+message FinalizeOrderRequest {
+    string order_id = 1;
+    repeated int32 vc = 2;
+}
+
+message FinalizeOrderResponse {
+    bool ok = 1;
 }

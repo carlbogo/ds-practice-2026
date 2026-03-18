@@ -3,15 +3,38 @@ syntax = "proto3";
 package suggestions;
 
 service SuggestionsService {
-  rpc GetSuggestions (SuggestionsRequest) returns (SuggestionsResponse);
+  rpc InitOrder(InitOrderRequest) returns (InitOrderResponse);
+  rpc GetSuggestions(SuggestionsRequest) returns (SuggestionsResponse);
+  rpc FinalizeOrder(FinalizeOrderRequest) returns (FinalizeOrderResponse);
+}
+
+message InitOrderRequest {
+  string order_id = 1;
+}
+
+message InitOrderResponse {
+  bool ok = 1;
+  repeated int32 vc = 2;
 }
 
 message SuggestionsRequest {
-  string transaction_id = 1;
+  string order_id = 1;
   repeated string purchased_books = 2;
   string mode = 3;
+  repeated int32 vc = 4;
 }
 
 message SuggestionsResponse {
   repeated string suggested_books = 1;
+  repeated int32 vc = 2;
+}
+
+message FinalizeOrderRequest {
+  string order_id = 1;
+  repeated int32 vc = 2;
+}
+
+message FinalizeOrderResponse {
+  bool ok = 1;
+  repeated int32 vc = 2;
 }

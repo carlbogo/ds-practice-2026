@@ -3,16 +3,20 @@ import os
 import hashlib
 import logging
 import time
+import threading
 
 # This set of lines are needed to import the gRPC stubs.
 # The path of the stubs is relative to the current file, or absolute inside the container.
 # Change these lines only if strictly needed.
+
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
-fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/fraud_detection'))
+fraud_detection_grpc_path = os.path.abspath(
+    os.path.join(FILE, '../../../utils/pb/fraud_detection')
+)
 sys.path.insert(0, fraud_detection_grpc_path)
+
 import fraud_detection_pb2 as fraud_detection
 import fraud_detection_pb2_grpc as fraud_detection_grpc
-
 import grpc
 from concurrent import futures
 
@@ -20,6 +24,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="===LOG=== %(asctime)s %(levelname)s %(name)s %(message)s",
 )
+
 logger = logging.getLogger("fraud_detection")
 
 # Card BIN prefixes associated with high-fraud prepaid/gift card ranges
@@ -27,28 +32,23 @@ _SUSPICIOUS_BIN_PREFIXES = {"400000", "411111", "520000", "530000", "601100"}
 
 # Disposable / temporary email domains
 _DISPOSABLE_EMAIL_DOMAINS = {
-    "tempmail.com", "throwaway.email", "guerrillamail.com",
-    "mailinator.com", "fakeinbox.com", "yopmail.com",
+    "tempmail.com",
+    "throwaway.email",
+    "guerrillamail.com",
+    "mailinator.com",
+    "fakeinbox.com",
+    "yopmail.com",
 }
 
 
-def _mask_card(card_number):
-    digits = "".join(ch for ch in str(card_number or "") if ch.isdigit())
-    if len(digits) < 4:
-        return "****"
-    return f"****{digits[-4:]}"
-
-
 def _check_card_blocklist(card_number):
-    """Flag if the card BIN (first 6 digits) is in a known-suspicious set."""
-    digits = "".join(ch for ch in card_number if ch.isdigit())
+    digits = "".join(ch for ch in str(card_number or "") if ch.isdigit())
     if len(digits) >= 6 and digits[:6] in _SUSPICIOUS_BIN_PREFIXES:
         return "Credit card BIN is in a high-risk range"
     return None
 
 
 def _check_disposable_email(email):
-    """Flag if the purchaser uses a known disposable email provider."""
     email = (email or "").strip().lower()
     if "@" in email:
         domain = email.rsplit("@", 1)[1]
@@ -57,95 +57,247 @@ def _check_disposable_email(email):
     return None
 
 
-def _check_risk_score(transaction_id, card_number, email):
-    """Deterministic risk score derived from a hash of transaction fields.
-
-    If the score exceeds a threshold, flag as suspicious.  This simulates
-    a model score without any external calls.
-    """
-    payload = f"{transaction_id}:{card_number}:{email}"
+def _check_risk_score(order_id, card_number, email):
+    payload = f"{order_id}:{card_number}:{email}"
     digest = hashlib.sha256(payload.encode()).hexdigest()
-    # Use last 4 hex chars as a 0-65535 score
     score = int(digest[-4:], 16)
-    # ~1.5 % of transactions will exceed the threshold (score >= 64000)
+
     if score >= 64000:
         return f"Transaction risk score is elevated ({score})"
     return None
 
 
 class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
-    def DetectFraud(self, request, context):
-        started = time.perf_counter()
-        metadata = dict(context.invocation_metadata())
-        correlation_id = metadata.get("x-correlation-id", request.transaction_id or "unknown")
 
-        logger.info(
-            "cid=%s event=fraud_check_received transaction_id=%s card=%s",
-            correlation_id,
-            request.transaction_id,
-            _mask_card(request.credit_card_number),
-        )
+    def __init__(self):
+        # Vector clock layout: [transaction_verification, fraud_detection, suggestions]
+        self.svc_idx = int(os.getenv("FRAUD_SERVICE_INDEX", "1"))
+        self.total_svcs = int(os.getenv("VECTOR_CLOCK_SIZE", "3"))
+
+        # order_id -> cached data + shared vector clock
+        self.orders = {}
+        self.lock = threading.Lock()
+
+    def _normalize_vc(self, incoming_vc):
+        vc = list(incoming_vc or [])
+
+        if len(vc) < self.total_svcs:
+            vc.extend([0] * (self.total_svcs - len(vc)))
+        elif len(vc) > self.total_svcs:
+            vc = vc[:self.total_svcs]
+
+        return vc
+
+    def _merge_and_increment(self, local_vc, incoming_vc):
+        incoming_vc = self._normalize_vc(incoming_vc)
+
+        for i in range(self.total_svcs):
+            local_vc[i] = max(local_vc[i], incoming_vc[i])
+
+        local_vc[self.svc_idx] += 1
+
+    def _get_order_or_not_found(self, order_id, context):
+        entry = self.orders.get(order_id)
+
+        if entry is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"Order '{order_id}' not initialized")
+
+        return entry
+
+    def InitOrder(self, request, context):
+        order_id = request.order_id or "unknown"
 
         try:
-            checks = [
-                _check_card_blocklist(request.credit_card_number),
-                _check_disposable_email(request.purchaser_email),
-                _check_risk_score(
-                    request.transaction_id,
-                    request.credit_card_number,
-                    request.purchaser_email,
-                ),
-            ]
-            reasons = [r for r in checks if r is not None]
+            with self.lock:
+                entry = {
+                    "order_id": request.order_id,
+                    "purchaser_email": request.purchaser_email,
+                    "credit_card_number": request.credit_card_number,
+                    "vc": [0] * self.total_svcs,
+                }
 
+                entry["vc"][self.svc_idx] += 1
+                self.orders[request.order_id] = entry
+
+                vc_snapshot = entry["vc"][:]
+
+            return fraud_detection.InitOrderResponse(
+                ok=True,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=init_order_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during fraud order initialization")
+
+            return fraud_detection.InitOrderResponse(
+                ok=False,
+                vc=[0] * self.total_svcs,
+            )
+
+    def CheckCardFraud(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self._get_order_or_not_found(request.order_id, context)
+
+                if entry is None:
+                    return fraud_detection.FraudEventResponse(
+                        is_fraud=False,
+                        reasons=["Order not initialized"],
+                        vc=[0] * self.total_svcs,
+                    )
+
+                self._merge_and_increment(entry["vc"], request.vc)
+                vc_snapshot = entry["vc"][:]
+
+                card_number = entry["credit_card_number"]
+
+            reason = _check_card_blocklist(card_number)
+            reasons = [reason] if reason else []
             is_fraud = len(reasons) > 0
-            latency_ms = (time.perf_counter() - started) * 1000
-            if is_fraud:
-                logger.warning(
-                    "cid=%s event=fraud_check_completed is_fraud=true reason_count=%s latency_ms=%.2f reasons=%s",
-                    correlation_id,
-                    len(reasons),
-                    latency_ms,
-                    reasons,
-                )
-            else:
-                logger.info(
-                    "cid=%s event=fraud_check_completed is_fraud=false reason_count=0 latency_ms=%.2f",
-                    correlation_id,
-                    latency_ms,
-                )
 
-            return fraud_detection.FraudDetectionResponse(
+            return fraud_detection.FraudEventResponse(
                 is_fraud=is_fraud,
                 reasons=reasons,
+                vc=vc_snapshot,
             )
+
         except Exception:
-            latency_ms = (time.perf_counter() - started) * 1000
-            logger.exception(
-                "cid=%s event=fraud_check_exception latency_ms=%.2f",
-                correlation_id,
-                latency_ms,
-            )
+            logger.exception("event=check_card_fraud_exception cid=%s", order_id)
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details("Internal error during fraud detection")
-            return fraud_detection.FraudDetectionResponse(
+            context.set_details("Internal error during card fraud check")
+
+            return fraud_detection.FraudEventResponse(
                 is_fraud=False,
-                reasons=["Internal fraud detection error"],
+                reasons=["Internal card fraud error"],
+                vc=[0] * self.total_svcs,
             )
+
+    def CheckEmailFraud(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self._get_order_or_not_found(request.order_id, context)
+
+                if entry is None:
+                    return fraud_detection.FraudEventResponse(
+                        is_fraud=False,
+                        reasons=["Order not initialized"],
+                        vc=[0] * self.total_svcs,
+                    )
+
+                self._merge_and_increment(entry["vc"], request.vc)
+                vc_snapshot = entry["vc"][:]
+
+                purchaser_email = entry["purchaser_email"]
+
+            reason = _check_disposable_email(purchaser_email)
+            reasons = [reason] if reason else []
+            is_fraud = len(reasons) > 0
+
+            return fraud_detection.FraudEventResponse(
+                is_fraud=is_fraud,
+                reasons=reasons,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=check_email_fraud_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during email fraud check")
+
+            return fraud_detection.FraudEventResponse(
+                is_fraud=False,
+                reasons=["Internal email fraud error"],
+                vc=[0] * self.total_svcs,
+            )
+
+    def CheckRiskScoreFraud(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self._get_order_or_not_found(request.order_id, context)
+
+                if entry is None:
+                    return fraud_detection.FraudEventResponse(
+                        is_fraud=False,
+                        reasons=["Order not initialized"],
+                        vc=[0] * self.total_svcs,
+                    )
+
+                self._merge_and_increment(entry["vc"], request.vc)
+                vc_snapshot = entry["vc"][:]
+
+                cached_order_id = entry["order_id"]
+                purchaser_email = entry["purchaser_email"]
+                card_number = entry["credit_card_number"]
+
+            reason = _check_risk_score(
+                cached_order_id,
+                card_number,
+                purchaser_email,
+            )
+
+            reasons = [reason] if reason else []
+            is_fraud = len(reasons) > 0
+
+            return fraud_detection.FraudEventResponse(
+                is_fraud=is_fraud,
+                reasons=reasons,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=check_risk_score_fraud_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during risk score fraud check")
+
+            return fraud_detection.FraudEventResponse(
+                is_fraud=False,
+                reasons=["Internal risk score fraud error"],
+                vc=[0] * self.total_svcs,
+            )
+
+    def FinalizeOrder(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                if request.order_id in self.orders:
+                    del self.orders[request.order_id]
+
+            return fraud_detection.FinalizeOrderResponse(ok=True)
+
+        except Exception:
+            logger.exception("event=finalize_order_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during order finalization")
+
+            return fraud_detection.FinalizeOrderResponse(ok=False)
 
 
 def serve():
-    # Create a gRPC server
-    server = grpc.server(futures.ThreadPoolExecutor())
-    fraud_detection_grpc.add_FraudDetectionServiceServicer_to_server(FraudDetectionService(), server)
-    # Listen on port 50051
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+
+    fraud_detection_grpc.add_FraudDetectionServiceServicer_to_server(
+        FraudDetectionService(),
+        server,
+    )
+
     port = "50051"
     server.add_insecure_port("[::]:" + port)
-    # Start the server
+
     server.start()
     logger.info("Server started. Listening on port %s.", port)
-    # Keep thread alive
+
     server.wait_for_termination()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     serve()

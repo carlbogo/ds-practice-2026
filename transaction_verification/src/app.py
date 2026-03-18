@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import threading
 from datetime import datetime
 
 # This set of lines are needed to import the gRPC stubs.
@@ -23,20 +24,6 @@ logging.basicConfig(
     format="===LOG=== %(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("transaction_verification")
-
-
-def _mask_card(card_number: str) -> str:
-    digits = "".join(ch for ch in (card_number or "") if ch.isdigit())
-    if len(digits) < 4:
-        return "****"
-    return f"****{digits[-4:]}"
-
-
-def _email_domain(email: str) -> str:
-    email = (email or "").strip()
-    if "@" not in email:
-        return "unknown"
-    return email.split("@", 1)[1]
 
 
 def _is_non_empty(value: str) -> bool:
@@ -121,104 +108,277 @@ def _validate_items(items) -> list[str]:
 class TransactionVerificationService(
     transaction_verification_grpc.TransactionVerificationServiceServicer
 ):
-    def VerifyTransaction(self, request, context):
-        started = time.perf_counter()
-        metadata = dict(context.invocation_metadata())
-        correlation_id = metadata.get("x-correlation-id", request.transaction_id or "unknown")
+    def __init__(self):
+        # Vector clock layout: [transaction_verification, fraud_detection, suggestions]
+        self.svc_idx = 0
+        self.total_svcs = int(os.getenv("VECTOR_CLOCK_SIZE", "3"))
+        self.orders = {}
+        self.lock = threading.Lock()
 
-        logger.info(
-            "cid=%s event=verification_received transaction_id=%s email_domain=%s card=%s billing_country=%s item_count=%s",
-            correlation_id,
-            request.transaction_id,
-            _email_domain(request.purchaser_email),
-            _mask_card(request.credit_card_number),
-            request.billing_country,
-            len(request.items),
-        )
+    def _normalize_vc(self, incoming_vc):
+        vc = list(incoming_vc or [])
+
+        if len(vc) < self.total_svcs:
+            vc.extend([0] * (self.total_svcs - len(vc)))
+        elif len(vc) > self.total_svcs:
+            vc = vc[:self.total_svcs]
+
+        return vc
+
+    def _merge_and_increment(self, local_vc, incoming_vc):
+        incoming_vc = self._normalize_vc(incoming_vc)
+
+        for i in range(self.total_svcs):
+            local_vc[i] = max(local_vc[i], incoming_vc[i])
+
+        local_vc[self.svc_idx] += 1
+
+    def _get_order_or_not_found(self, order_id, context):
+        entry = self.orders.get(order_id)
+
+        if entry is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(f"Order '{order_id}' not initialized")
+
+        return entry
+
+    def InitOrder(self, request, context):
+        order_id = request.order_id or "unknown"
 
         try:
-            reasons = []
+            with self.lock:
+                entry = {
+                    "order_id": request.order_id,
+                    "purchaser_name": request.purchaser_name,
+                    "purchaser_email": request.purchaser_email,
+                    "credit_card_number": request.credit_card_number,
+                    "credit_card_expiration": request.credit_card_expiration,
+                    "credit_card_cvv": request.credit_card_cvv,
+                    "billing_street": request.billing_street,
+                    "billing_city": request.billing_city,
+                    "billing_state": request.billing_state,
+                    "billing_zip": request.billing_zip,
+                    "billing_country": request.billing_country,
+                    "items": [
+                        {"name": item.name, "quantity": item.quantity}
+                        for item in request.items
+                    ],
+                    "vc": [0] * self.total_svcs,
+                }
 
-            if not _is_non_empty(request.transaction_id):
-                reasons.append("Missing transaction ID")
-            if not _is_non_empty(request.purchaser_name):
-                reasons.append("Missing purchaser name")
-            if not _is_non_empty(request.purchaser_email):
-                reasons.append("Missing purchaser email")
-            elif not _is_valid_email(request.purchaser_email):
-                reasons.append("Purchaser email format is invalid")
+                entry["vc"][self.svc_idx] += 1
+                self.orders[request.order_id] = entry
 
-            if not _is_non_empty(request.credit_card_number):
-                reasons.append("Missing credit card number")
-            elif not _is_luhn_valid(request.credit_card_number):
-                reasons.append("Credit card number is invalid")
+                vc_snapshot = entry["vc"][:]
 
-            if not _is_non_empty(request.credit_card_expiration):
-                reasons.append("Missing credit card expiration")
-            elif not _is_valid_expiration(request.credit_card_expiration):
-                reasons.append("Credit card expiration is invalid or expired")
-
-            if not _is_non_empty(request.credit_card_cvv):
-                reasons.append("Missing credit card CVV")
-            elif not _is_valid_cvv(request.credit_card_cvv):
-                reasons.append("Credit card CVV is invalid")
-
-            if not _is_non_empty(request.billing_street):
-                reasons.append("Missing billing street")
-            if not _is_non_empty(request.billing_city):
-                reasons.append("Missing billing city")
-            if not _is_non_empty(request.billing_state):
-                reasons.append("Missing billing state")
-            if not _is_non_empty(request.billing_zip):
-                reasons.append("Missing billing zip")
-            elif not _is_valid_billing_zip(request.billing_zip):
-                reasons.append("Billing zip format is invalid")
-            if not _is_non_empty(request.billing_country):
-                reasons.append("Missing billing country")
-
-            reasons.extend(_validate_items(request.items))
-
-            if not request.terms_accepted:
-                reasons.append("Terms and conditions must be accepted")
-
-            is_valid = len(reasons) == 0
-            latency_ms = (time.perf_counter() - started) * 1000
-            if is_valid:
-                logger.info(
-                    "cid=%s event=verification_completed is_valid=true reason_count=0 latency_ms=%.2f",
-                    correlation_id,
-                    latency_ms,
-                )
-            else:
-                logger.warning(
-                    "cid=%s event=verification_completed is_valid=false reason_count=%s latency_ms=%.2f reasons=%s",
-                    correlation_id,
-                    len(reasons),
-                    latency_ms,
-                    reasons,
-                )
-
-            return transaction_verification.TransactionVerificationResponse(
-                is_valid=is_valid,
-                reasons=reasons,
+            return transaction_verification.InitOrderResponse(
+                ok=True,
+                vc=vc_snapshot,
             )
         except Exception:
-            latency_ms = (time.perf_counter() - started) * 1000
-            logger.exception(
-                "cid=%s event=verification_exception latency_ms=%.2f",
-                correlation_id,
-                latency_ms,
-            )
+            logger.exception("event=init_order_exception cid=%s", order_id)
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details("Internal error during transaction verification")
-            return transaction_verification.TransactionVerificationResponse(
-                is_valid=False,
-                reasons=["Internal verification error"],
+            context.set_details(
+                "Internal error during transaction verification order initialization"
             )
+
+            return transaction_verification.InitOrderResponse(
+                ok=False,
+                vc=[0] * self.total_svcs,
+            )
+
+    def CheckItems(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self._get_order_or_not_found(request.order_id, context)
+
+                if entry is None:
+                    return transaction_verification.TransactionEventResponse(
+                        is_valid=False,
+                        reasons=["Order not initialized"],
+                        vc=[0] * self.total_svcs,
+                    )
+
+                self._merge_and_increment(entry["vc"], request.vc)
+                vc_snapshot = entry["vc"][:]
+                items = [dict(item) for item in entry["items"]]
+
+            item_messages = [
+                transaction_verification.Item(
+                    name=item["name"],
+                    quantity=item["quantity"],
+                )
+                for item in items
+            ]
+
+            reasons = _validate_items(item_messages)
+            is_valid = len(reasons) == 0
+
+            return transaction_verification.TransactionEventResponse(
+                is_valid=is_valid,
+                reasons=reasons,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=check_items_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during item validation")
+
+            return transaction_verification.TransactionEventResponse(
+                is_valid=False,
+                reasons=["Internal item validation error"],
+                vc=[0] * self.total_svcs,
+            )
+
+    def CheckUserAndBillingData(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self._get_order_or_not_found(request.order_id, context)
+
+                if entry is None:
+                    return transaction_verification.TransactionEventResponse(
+                        is_valid=False,
+                        reasons=["Order not initialized"],
+                        vc=[0] * self.total_svcs,
+                    )
+
+                self._merge_and_increment(entry["vc"], request.vc)
+                vc_snapshot = entry["vc"][:]
+
+                cached_order_id = entry["order_id"]
+                purchaser_name = entry["purchaser_name"]
+                purchaser_email = entry["purchaser_email"]
+                billing_street = entry["billing_street"]
+                billing_city = entry["billing_city"]
+                billing_state = entry["billing_state"]
+                billing_zip = entry["billing_zip"]
+                billing_country = entry["billing_country"]
+
+            reasons = []
+
+            if not _is_non_empty(cached_order_id):
+                reasons.append("Missing transaction ID")
+            if not _is_non_empty(purchaser_name):
+                reasons.append("Missing purchaser name")
+            if not _is_non_empty(purchaser_email):
+                reasons.append("Missing purchaser email")
+            elif not _is_valid_email(purchaser_email):
+                reasons.append("Purchaser email format is invalid")
+
+            if not _is_non_empty(billing_street):
+                reasons.append("Missing billing street")
+            if not _is_non_empty(billing_city):
+                reasons.append("Missing billing city")
+            if not _is_non_empty(billing_state):
+                reasons.append("Missing billing state")
+            if not _is_non_empty(billing_zip):
+                reasons.append("Missing billing zip")
+            elif not _is_valid_billing_zip(billing_zip):
+                reasons.append("Billing zip format is invalid")
+            if not _is_non_empty(billing_country):
+                reasons.append("Missing billing country")
+
+            is_valid = len(reasons) == 0
+
+            return transaction_verification.TransactionEventResponse(
+                is_valid=is_valid,
+                reasons=reasons,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=check_user_billing_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during user and billing validation")
+
+            return transaction_verification.TransactionEventResponse(
+                is_valid=False,
+                reasons=["Internal user and billing validation error"],
+                vc=[0] * self.total_svcs,
+            )
+
+    def CheckPaymentData(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                entry = self._get_order_or_not_found(request.order_id, context)
+
+                if entry is None:
+                    return transaction_verification.TransactionEventResponse(
+                        is_valid=False,
+                        reasons=["Order not initialized"],
+                        vc=[0] * self.total_svcs,
+                    )
+
+                self._merge_and_increment(entry["vc"], request.vc)
+                vc_snapshot = entry["vc"][:]
+
+                credit_card_number = entry["credit_card_number"]
+                credit_card_expiration = entry["credit_card_expiration"]
+                credit_card_cvv = entry["credit_card_cvv"]
+
+            reasons = []
+
+            if not _is_non_empty(credit_card_number):
+                reasons.append("Missing credit card number")
+            elif not _is_luhn_valid(credit_card_number):
+                reasons.append("Credit card number is invalid")
+
+            if not _is_non_empty(credit_card_expiration):
+                reasons.append("Missing credit card expiration")
+            elif not _is_valid_expiration(credit_card_expiration):
+                reasons.append("Credit card expiration is invalid or expired")
+
+            if not _is_non_empty(credit_card_cvv):
+                reasons.append("Missing credit card CVV")
+            elif not _is_valid_cvv(credit_card_cvv):
+                reasons.append("Credit card CVV is invalid")
+
+            is_valid = len(reasons) == 0
+
+            return transaction_verification.TransactionEventResponse(
+                is_valid=is_valid,
+                reasons=reasons,
+                vc=vc_snapshot,
+            )
+
+        except Exception:
+            logger.exception("event=check_payment_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during payment validation")
+
+            return transaction_verification.TransactionEventResponse(
+                is_valid=False,
+                reasons=["Internal payment validation error"],
+                vc=[0] * self.total_svcs,
+            )
+
+    def FinalizeOrder(self, request, context):
+        order_id = request.order_id or "unknown"
+
+        try:
+            with self.lock:
+                if request.order_id in self.orders:
+                    del self.orders[request.order_id]
+
+            return transaction_verification.FinalizeOrderResponse(ok=True)
+
+        except Exception:
+            logger.exception("event=finalize_order_exception cid=%s", order_id)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error during order finalization")
+
+            return transaction_verification.FinalizeOrderResponse(ok=False)
 
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor())
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     transaction_verification_grpc.add_TransactionVerificationServiceServicer_to_server(
         TransactionVerificationService(), server
     )
@@ -231,5 +391,4 @@ def serve():
 
 if __name__ == '__main__':
     serve()
-
 
