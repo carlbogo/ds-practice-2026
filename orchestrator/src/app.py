@@ -26,12 +26,19 @@ suggestions_grpc_path = os.path.abspath(
 )
 sys.path.insert(0, suggestions_grpc_path)
 
+order_queue_grpc_path = os.path.abspath(
+    os.path.join(FILE, "../../../utils/pb/order_queue")
+)
+sys.path.insert(0, order_queue_grpc_path)
+
 import transaction_verification_pb2 as transaction_verification
 import transaction_verification_pb2_grpc as transaction_verification_grpc
 import fraud_detection_pb2 as fraud_detection
 import fraud_detection_pb2_grpc as fraud_detection_grpc
 import suggestions_pb2 as suggestions
 import suggestions_pb2_grpc as suggestions_grpc
+import order_queue_pb2 as order_queue
+import order_queue_pb2_grpc as order_queue_grpc
 
 
 app = Flask(__name__)
@@ -50,6 +57,7 @@ TRANSACTION_VERIFICATION_ADDR = os.getenv(
 )
 FRAUD_DETECTION_ADDR = os.getenv("FRAUD_DETECTION_ADDR", "fraud_detection:50051")
 SUGGESTIONS_ADDR = os.getenv("SUGGESTIONS_ADDR", "suggestions:50053")
+ORDER_QUEUE_ADDR = os.getenv("ORDER_QUEUE_ADDR", "order_queue:50054")
 
 transaction_verification_channel = grpc.insecure_channel(
     TRANSACTION_VERIFICATION_ADDR
@@ -67,6 +75,9 @@ fraud_detection_stub = fraud_detection_grpc.FraudDetectionServiceStub(
 
 suggestions_channel = grpc.insecure_channel(SUGGESTIONS_ADDR)
 suggestions_stub = suggestions_grpc.SuggestionsServiceStub(suggestions_channel)
+
+order_queue_channel = grpc.insecure_channel(ORDER_QUEUE_ADDR)
+order_queue_stub = order_queue_grpc.OrderQueueServiceStub(order_queue_channel)
 
 
 def _merge_vc(*vectors):
@@ -1016,6 +1027,40 @@ def run_checkout_workflow(checkout_data, correlation_id):
                         )
 
 
+def _enqueue_order(checkout_data, suggested_books, correlation_id):
+    """Enqueue an approved order to the order queue for execution."""
+    user = checkout_data.get("user", {})
+    credit_card = checkout_data.get("creditCard", {})
+    billing_address = checkout_data.get("billingAddress", {})
+
+    items = [
+        order_queue.OrderItem(
+            name=str(item.get("name", "")),
+            quantity=int(item.get("quantity", 0)),
+        )
+        for item in checkout_data.get("items", [])
+    ]
+
+    enqueue_request = order_queue.EnqueueRequest(
+        order_id=correlation_id,
+        purchaser_name=user.get("name", ""),
+        purchaser_email=user.get("contact", ""),
+        credit_card_number=credit_card.get("number", ""),
+        credit_card_expiration=credit_card.get("expirationDate", ""),
+        credit_card_cvv=credit_card.get("cvv", ""),
+        billing_street=billing_address.get("street", ""),
+        billing_city=billing_address.get("city", ""),
+        billing_state=billing_address.get("state", ""),
+        billing_zip=billing_address.get("zip", ""),
+        billing_country=billing_address.get("country", ""),
+        items=items,
+        suggested_books=list(suggested_books or []),
+    )
+
+    response = order_queue_stub.Enqueue(enqueue_request, timeout=RPC_TIMEOUT_SECONDS)
+    return response.ok
+
+
 @app.route("/checkout", methods=["POST"])
 def checkout():
     request_data = request.get_json(silent=True)
@@ -1040,6 +1085,21 @@ def checkout():
             "reasons": result["reasons"],
             "suggestedBooks": [],
         }
+
+    # Order approved — enqueue for execution
+    try:
+        enqueued = _enqueue_order(
+            request_data, result["suggestedBooks"], correlation_id,
+        )
+        if enqueued:
+            logger.info("event=order_enqueued cid=%s", correlation_id)
+        else:
+            logger.error("event=enqueue_failed cid=%s", correlation_id)
+    except grpc.RpcError as error:
+        logger.error(
+            "event=enqueue_rpc_failed code=%s details=%s cid=%s",
+            error.code(), error.details(), correlation_id,
+        )
 
     return {
         "status": "Order Approved",

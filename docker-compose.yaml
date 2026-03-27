@@ -89,3 +89,32 @@ services:
     volumes:
       - ./utils:/app/utils
       - ./suggestions/src:/app/suggestions/src
+  order_queue:
+    build:
+      context: ./
+      dockerfile: ./order_queue/Dockerfile
+    ports:
+      - 50054:50054
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/order_queue/src/app.py
+      - PYTHONPATH=/app
+    volumes:
+      - ./utils:/app/utils
+      - ./order_queue/src:/app/order_queue/src
+  order_executor:
+    build:
+      context: ./
+      dockerfile: ./order_executor/Dockerfile
+    deploy:
+      replicas: 3
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/order_executor/src/app.py
+      - PYTHONPATH=/app
+      - EXECUTOR_PORT=50055
+      - ORDER_QUEUE_ADDR=order_queue:50054
+      - SERVICE_NAME=order_executor
+    volumes:
+      - ./utils:/app/utils
+      - ./order_executor/src:/app/order_executor/src

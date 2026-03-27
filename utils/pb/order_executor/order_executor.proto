@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package order_executor;
+
+service OrderExecutorService {
+    // Bully algorithm: sent to processes with higher IDs to start an election
+    rpc Election(ElectionRequest) returns (ElectionResponse);
+    // Bully algorithm: sent by the winner to announce itself as the new leader
+    rpc Coordinator(CoordinatorRequest) returns (CoordinatorResponse);
+    // Heartbeat: used by non-leaders to check if the leader is still alive
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message ElectionRequest {
+    int32 sender_id = 1;
+}
+
+message ElectionResponse {
+    bool alive = 1;
+    int32 responder_id = 2;
+}
+
+message CoordinatorRequest {
+    int32 leader_id = 1;
+}
+
+message CoordinatorResponse {
+    bool acknowledged = 1;
+}
+
+message HeartbeatRequest {
+    int32 sender_id = 1;
+}
+
+message HeartbeatResponse {
+    bool alive = 1;
+    int32 leader_id = 2;
+}

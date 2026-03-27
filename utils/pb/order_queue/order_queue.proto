@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package order_queue;
+
+service OrderQueueService {
+    rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+    rpc Dequeue(DequeueRequest) returns (DequeueResponse);
+}
+
+message OrderItem {
+    string name = 1;
+    int32 quantity = 2;
+}
+
+message EnqueueRequest {
+    string order_id = 1;
+    string purchaser_name = 2;
+    string purchaser_email = 3;
+    string credit_card_number = 4;
+    string credit_card_expiration = 5;
+    string credit_card_cvv = 6;
+    string billing_street = 7;
+    string billing_city = 8;
+    string billing_state = 9;
+    string billing_zip = 10;
+    string billing_country = 11;
+    repeated OrderItem items = 12;
+    repeated string suggested_books = 13;
+}
+
+message EnqueueResponse {
+    bool ok = 1;
+}
+
+message DequeueRequest {}
+
+message DequeueResponse {
+    bool ok = 1;
+    string order_id = 2;
+    string purchaser_name = 3;
+    string purchaser_email = 4;
+    string credit_card_number = 5;
+    string credit_card_expiration = 6;
+    string credit_card_cvv = 7;
+    string billing_street = 8;
+    string billing_city = 9;
+    string billing_state = 10;
+    string billing_zip = 11;
+    string billing_country = 12;
+    repeated OrderItem items = 13;
+    repeated string suggested_books = 14;
+}
