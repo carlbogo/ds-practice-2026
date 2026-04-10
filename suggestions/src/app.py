@@ -235,8 +235,10 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
                         vc=[0] * self.total_svcs,
                     )
 
-                self._merge_and_increment(entry["vc"], request.vc)
-                vc_snapshot = entry["vc"][:]
+                # VC fix: work on a COPY so parallel events stay concurrent
+                local_vc = entry["vc"][:]
+                self._merge_and_increment(local_vc, request.vc)
+                vc_snapshot = local_vc
 
             purchased = list(request.purchased_books)
             mode = request.mode or "author"

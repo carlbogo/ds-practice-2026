@@ -8,6 +8,7 @@ service TransactionVerificationService {
     rpc CheckUserAndBillingData(TransactionEventRequest) returns (TransactionEventResponse);
     rpc CheckPaymentData(TransactionEventRequest) returns (TransactionEventResponse);
     rpc FinalizeOrder(FinalizeOrderRequest) returns (FinalizeOrderResponse);
+    rpc StartWorkflow(StartWorkflowRequest) returns (WorkflowResponse);
 }
 
 message Item {
@@ -53,4 +54,18 @@ message FinalizeOrderRequest {
 
 message FinalizeOrderResponse {
     bool ok = 1;
+}
+
+message StartWorkflowRequest {
+    string order_id = 1;
+    repeated int32 vc = 2;
+    repeated string purchased_books = 3;
+    string suggestion_mode = 4;
+}
+
+message WorkflowResponse {
+    bool ok = 1;
+    repeated string reasons = 2;
+    repeated string suggested_books = 3;
+    repeated int32 vc = 4;
 }

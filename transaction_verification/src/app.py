@@ -2,10 +2,11 @@ import sys
 import os
 import re
 import threading
+import logging
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
-# This set of lines are needed to import the gRPC stubs.
-# The path of the stubs is relative to the current file, or absolute inside the container.
+# gRPC stubs for this service
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 transaction_verification_grpc_path = os.path.abspath(
     os.path.join(FILE, '../../../utils/pb/transaction_verification')
@@ -14,16 +15,37 @@ sys.path.insert(0, transaction_verification_grpc_path)
 import transaction_verification_pb2 as transaction_verification
 import transaction_verification_pb2_grpc as transaction_verification_grpc
 
+# gRPC stubs for fraud_detection (peer-to-peer calls)
+fraud_detection_grpc_path = os.path.abspath(
+    os.path.join(FILE, '../../../utils/pb/fraud_detection')
+)
+sys.path.insert(0, fraud_detection_grpc_path)
+import fraud_detection_pb2 as fraud_detection
+import fraud_detection_pb2_grpc as fraud_detection_grpc
+
 import grpc
 from concurrent import futures
-import logging
-import time
 
 logging.basicConfig(
     level=logging.INFO,
     format="===LOG=== %(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("transaction_verification")
+
+PIPELINE_TIMEOUT = float(os.getenv("PIPELINE_TIMEOUT_SECONDS", "30.0"))
+FRAUD_DETECTION_ADDR = os.getenv("FRAUD_DETECTION_ADDR", "fraud_detection:50051")
+
+# Lazy-init fraud_detection stub
+_fraud_channel = None
+_fraud_stub = None
+
+
+def _get_fraud_stub():
+    global _fraud_channel, _fraud_stub
+    if _fraud_stub is None:
+        _fraud_channel = grpc.insecure_channel(FRAUD_DETECTION_ADDR)
+        _fraud_stub = fraud_detection_grpc.FraudDetectionServiceStub(_fraud_channel)
+    return _fraud_stub
 
 
 def _is_non_empty(value: str) -> bool:
@@ -57,7 +79,6 @@ def _is_luhn_valid(card_number: str) -> bool:
 
 def _is_valid_expiration(expiration: str) -> bool:
     exp = (expiration or "").strip()
-    # Accept MM/YY or MM/YYYY
     match = re.fullmatch(r"(0[1-9]|1[0-2])\/(\d{2}|\d{4})", exp)
     if not match:
         return False
@@ -67,7 +88,6 @@ def _is_valid_expiration(expiration: str) -> bool:
     year = int(year_raw) + 2000 if len(year_raw) == 2 else int(year_raw)
 
     now = datetime.utcnow()
-    # Card valid through end of expiry month
     if year < now.year:
         return False
     if year == now.year and month < now.month:
@@ -82,7 +102,6 @@ def _is_valid_cvv(cvv: str) -> bool:
 
 def _is_valid_billing_zip(zip_code: str) -> bool:
     zip_code = (zip_code or "").strip()
-    # Simple international-safe check (3-10, letters/numbers/space/hyphen)
     if not re.fullmatch(r"[A-Za-z0-9 -]{3,10}", zip_code):
         return False
     return any(ch.isdigit() for ch in zip_code)
@@ -91,18 +110,24 @@ def _is_valid_billing_zip(zip_code: str) -> bool:
 def _validate_items(items) -> list[str]:
     errors = []
     if len(items) == 0:
-        # Reject empty cart
         errors.append("At least one item is required")
         return errors
 
     for idx, item in enumerate(items):
         if not _is_non_empty(item.name):
-            # Reject item with blank name
             errors.append(f"Item at index {idx} must have a name")
         if item.quantity <= 0:
-            # Reject item with non-positive quantity
             errors.append(f"Item '{item.name or idx}' must have quantity > 0")
     return errors
+
+
+class _InternalContext:
+    """Dummy gRPC context for internal (non-RPC) calls to step handlers."""
+    def set_code(self, code):
+        pass
+
+    def set_details(self, details):
+        pass
 
 
 class TransactionVerificationService(
@@ -201,8 +226,10 @@ class TransactionVerificationService(
                         vc=[0] * self.total_svcs,
                     )
 
-                self._merge_and_increment(entry["vc"], request.vc)
-                vc_snapshot = entry["vc"][:]
+                # VC fix: work on a COPY so parallel steps stay concurrent
+                local_vc = entry["vc"][:]
+                self._merge_and_increment(local_vc, request.vc)
+                vc_snapshot = local_vc
                 items = [dict(item) for item in entry["items"]]
 
             item_messages = [
@@ -215,6 +242,13 @@ class TransactionVerificationService(
 
             reasons = _validate_items(item_messages)
             is_valid = len(reasons) == 0
+
+            logger.info(
+                "event=step_completed step=A outcome=%s vc=%s cid=%s",
+                "success" if is_valid else "reject",
+                vc_snapshot,
+                order_id,
+            )
 
             return transaction_verification.TransactionEventResponse(
                 is_valid=is_valid,
@@ -247,8 +281,10 @@ class TransactionVerificationService(
                         vc=[0] * self.total_svcs,
                     )
 
-                self._merge_and_increment(entry["vc"], request.vc)
-                vc_snapshot = entry["vc"][:]
+                # VC fix: work on a COPY
+                local_vc = entry["vc"][:]
+                self._merge_and_increment(local_vc, request.vc)
+                vc_snapshot = local_vc
 
                 cached_order_id = entry["order_id"]
                 purchaser_name = entry["purchaser_name"]
@@ -285,6 +321,13 @@ class TransactionVerificationService(
 
             is_valid = len(reasons) == 0
 
+            logger.info(
+                "event=step_completed step=B outcome=%s vc=%s cid=%s",
+                "success" if is_valid else "reject",
+                vc_snapshot,
+                order_id,
+            )
+
             return transaction_verification.TransactionEventResponse(
                 is_valid=is_valid,
                 reasons=reasons,
@@ -316,8 +359,10 @@ class TransactionVerificationService(
                         vc=[0] * self.total_svcs,
                     )
 
-                self._merge_and_increment(entry["vc"], request.vc)
-                vc_snapshot = entry["vc"][:]
+                # VC fix: work on a COPY
+                local_vc = entry["vc"][:]
+                self._merge_and_increment(local_vc, request.vc)
+                vc_snapshot = local_vc
 
                 credit_card_number = entry["credit_card_number"]
                 credit_card_expiration = entry["credit_card_expiration"]
@@ -341,6 +386,13 @@ class TransactionVerificationService(
                 reasons.append("Credit card CVV is invalid")
 
             is_valid = len(reasons) == 0
+
+            logger.info(
+                "event=step_completed step=C outcome=%s vc=%s cid=%s",
+                "success" if is_valid else "reject",
+                vc_snapshot,
+                order_id,
+            )
 
             return transaction_verification.TransactionEventResponse(
                 is_valid=is_valid,
@@ -376,6 +428,134 @@ class TransactionVerificationService(
 
             return transaction_verification.FinalizeOrderResponse(ok=False)
 
+    # ------------------------------------------------------------------
+    # StartWorkflow: peer-to-peer entry point called by the orchestrator
+    # ------------------------------------------------------------------
+
+    def StartWorkflow(self, request, context):
+        order_id = request.order_id or "unknown"
+        base_vc = list(request.vc)
+        purchased_books = list(request.purchased_books)
+        suggestion_mode = request.suggestion_mode or "author"
+
+        logger.info(
+            "event=workflow_started base_vc=%s cid=%s",
+            base_vc, order_id,
+        )
+
+        dummy_ctx = _InternalContext()
+
+        # --- Run A and B in parallel ---
+        def run_a():
+            req = transaction_verification.TransactionEventRequest(
+                order_id=order_id, vc=base_vc,
+            )
+            return self.CheckItems(req, dummy_ctx)
+
+        def run_b():
+            req = transaction_verification.TransactionEventRequest(
+                order_id=order_id, vc=base_vc,
+            )
+            return self.CheckUserAndBillingData(req, dummy_ctx)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_a = pool.submit(run_a)
+            future_b = pool.submit(run_b)
+            a_resp = future_a.result()
+            b_resp = future_b.result()
+
+        a_ok, a_reasons, a_vc = a_resp.is_valid, list(a_resp.reasons), list(a_resp.vc)
+        b_ok, b_reasons, b_vc = b_resp.is_valid, list(b_resp.reasons), list(b_resp.vc)
+
+        # --- Run C (depends on A) ---
+        if a_ok:
+            c_req = transaction_verification.TransactionEventRequest(
+                order_id=order_id, vc=a_vc,
+            )
+            c_resp = self.CheckPaymentData(c_req, dummy_ctx)
+            c_ok, c_reasons, c_vc = c_resp.is_valid, list(c_resp.reasons), list(c_resp.vc)
+        else:
+            # A failed → C is skipped, forward A's failure
+            c_ok, c_reasons, c_vc = False, list(a_reasons), list(a_vc)
+
+        logger.info(
+            "event=tx_steps_done A=%s B=%s C=%s a_vc=%s b_vc=%s c_vc=%s cid=%s",
+            a_ok, b_ok, c_ok, a_vc, b_vc, c_vc, order_id,
+        )
+
+        # --- Deliver B and C results to fraud_detection in parallel ---
+        # Both calls block until the full pipeline (D→E→F→G) completes.
+        fraud_stub = _get_fraud_stub()
+
+        def deliver_b():
+            req = fraud_detection.DeliverStepRequest(
+                order_id=order_id,
+                step="D",
+                ok=b_ok,
+                reasons=b_reasons,
+                vc=b_vc,
+                purchased_books=purchased_books,
+                suggestion_mode=suggestion_mode,
+            )
+            return fraud_stub.DeliverStepResult(req, timeout=PIPELINE_TIMEOUT)
+
+        def deliver_c():
+            req = fraud_detection.DeliverStepRequest(
+                order_id=order_id,
+                step="E",
+                ok=c_ok,
+                reasons=c_reasons,
+                vc=c_vc,
+                purchased_books=purchased_books,
+                suggestion_mode=suggestion_mode,
+            )
+            return fraud_stub.DeliverStepResult(req, timeout=PIPELINE_TIMEOUT)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_d = pool.submit(deliver_b)
+            future_c = pool.submit(deliver_c)
+            # Both return the same PipelineResponse once pipeline completes
+            pipeline_resp = future_d.result()
+            # Ignore second result (same data)
+            try:
+                future_c.result()
+            except Exception:
+                pass
+
+        # Combine all reasons: tx verification failures + pipeline failures
+        all_reasons = []
+        if not a_ok:
+            all_reasons.extend(a_reasons)
+        if not b_ok:
+            all_reasons.extend(b_reasons)
+        if not c_ok and a_ok:
+            # Only add C's own reasons if A succeeded (otherwise C's reasons are A's)
+            all_reasons.extend(c_reasons)
+        all_reasons.extend(list(pipeline_resp.reasons))
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_reasons = []
+        for r in all_reasons:
+            if r not in seen:
+                seen.add(r)
+                unique_reasons.append(r)
+
+        pipeline_ok = pipeline_resp.ok and a_ok and b_ok and c_ok
+        final_vc = list(pipeline_resp.vc) if pipeline_resp.vc else c_vc
+
+        logger.info(
+            "event=workflow_done ok=%s reasons=%s final_vc=%s cid=%s",
+            pipeline_ok, unique_reasons, final_vc, order_id,
+        )
+
+        return transaction_verification.WorkflowResponse(
+            ok=pipeline_ok,
+            reasons=unique_reasons,
+            suggested_books=list(pipeline_resp.suggested_books),
+            vc=final_vc,
+        )
+
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
@@ -391,4 +571,3 @@ def serve():
 
 if __name__ == '__main__':
     serve()
-
