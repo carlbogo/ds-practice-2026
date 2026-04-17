@@ -8,20 +8,16 @@ from concurrent import futures
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 
-order_executor_grpc_path = os.path.abspath(
-    os.path.join(FILE, '../../../utils/pb/order_executor')
-)
-sys.path.insert(0, order_executor_grpc_path)
 
-order_queue_grpc_path = os.path.abspath(
-    os.path.join(FILE, '../../../utils/pb/order_queue')
-)
-sys.path.insert(0, order_queue_grpc_path)
 
-import order_executor_pb2 as order_executor
-import order_executor_pb2_grpc as order_executor_grpc
-import order_queue_pb2 as order_queue
-import order_queue_pb2_grpc as order_queue_grpc
+from utils.pb.books_database import books_database_pb2 as books_pb2
+from utils.pb.books_database import books_database_pb2_grpc as books_pb2_grpc
+
+from utils.pb.order_executor import order_executor_pb2 as order_executor
+from utils.pb.order_executor import order_executor_pb2_grpc as order_executor_grpc
+
+from utils.pb.order_queue import order_queue_pb2 as order_queue
+from utils.pb.order_queue import order_queue_pb2_grpc as order_queue_grpc
 import grpc
 
 logging.basicConfig(
@@ -34,6 +30,7 @@ logger = logging.getLogger("order_executor")
 EXECUTOR_PORT = int(os.getenv("EXECUTOR_PORT", "50055"))
 ORDER_QUEUE_ADDR = os.getenv("ORDER_QUEUE_ADDR", "order_queue:50054")
 SERVICE_NAME = os.getenv("SERVICE_NAME", "order_executor")
+BOOKS_DB_ADDR = os.getenv("BOOKS_DB_ADDR", "books_db_1:50060")
 
 ELECTION_TIMEOUT = 2.0
 HEARTBEAT_INTERVAL = 3.0
@@ -288,6 +285,8 @@ def heartbeat_monitor(election):
 
 def order_processing_loop(election):
     """Leader dequeues orders from the queue and executes them."""
+    db_channel = grpc.insecure_channel(BOOKS_DB_ADDR)
+    db_stub = books_pb2_grpc.BooksDatabaseStub(db_channel)
     while True:
         time.sleep(DEQUEUE_INTERVAL)
 
@@ -315,12 +314,44 @@ def order_processing_loop(election):
                     response.purchaser_name,
                     items_str,
                 )
-                logger.info(
-                    "executor_id=%d event=order_executed order_id=%s "
-                    "status=completed",
-                    election.executor_id,
-                    response.order_id,
-                )
+
+                success = True
+
+                for item in response.items:
+                    result = db_stub.DecrementStock(
+                        books_pb2.DecrementRequest(
+                            title=item.name,
+                            quantity=item.quantity
+                        )
+                    )
+
+                    if not result.success:
+                        success = False
+                        logger.warning(
+                            "executor_id=%d event=stock_failed book=%s requested=%d",
+                            election.executor_id,
+                            item.name,
+                            item.quantity,
+                        )
+
+                if success:
+                    logger.info(
+                        "executor_id=%d event=order_executed order_id=%s status=completed",
+                        election.executor_id,
+                        response.order_id,
+                    )
+                else:
+                    logger.warning(
+                        "executor_id=%d event=order_failed order_id=%s reason=insufficient_stock",
+                        election.executor_id,
+                        response.order_id,
+                    )
+                # logger.info(
+                #     "executor_id=%d event=order_executed order_id=%s "
+                #     "status=completed",
+                #     election.executor_id,
+                #     response.order_id,
+                # )
         except grpc.RpcError as e:
             logger.warning(
                 "executor_id=%d event=dequeue_failed error=%s",

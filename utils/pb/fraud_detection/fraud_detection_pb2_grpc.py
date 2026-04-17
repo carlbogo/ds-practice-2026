@@ -3,9 +3,9 @@
 import grpc
 import warnings
 
-import fraud_detection_pb2 as fraud__detection__pb2
+from fraud_detection import fraud_detection_pb2 as fraud__detection_dot_fraud__detection__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.78.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in fraud_detection_pb2_grpc.py depends on'
+        + ' but the generated code in fraud_detection/fraud_detection_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -36,33 +36,33 @@ class FraudDetectionServiceStub(object):
         """
         self.InitOrder = channel.unary_unary(
                 '/fraud_detection.FraudDetectionService/InitOrder',
-                request_serializer=fraud__detection__pb2.InitOrderRequest.SerializeToString,
-                response_deserializer=fraud__detection__pb2.InitOrderResponse.FromString,
+                request_serializer=fraud__detection_dot_fraud__detection__pb2.InitOrderRequest.SerializeToString,
+                response_deserializer=fraud__detection_dot_fraud__detection__pb2.InitOrderResponse.FromString,
                 _registered_method=True)
         self.CheckCardFraud = channel.unary_unary(
                 '/fraud_detection.FraudDetectionService/CheckCardFraud',
-                request_serializer=fraud__detection__pb2.FraudEventRequest.SerializeToString,
-                response_deserializer=fraud__detection__pb2.FraudEventResponse.FromString,
+                request_serializer=fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.SerializeToString,
+                response_deserializer=fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.FromString,
                 _registered_method=True)
         self.CheckEmailFraud = channel.unary_unary(
                 '/fraud_detection.FraudDetectionService/CheckEmailFraud',
-                request_serializer=fraud__detection__pb2.FraudEventRequest.SerializeToString,
-                response_deserializer=fraud__detection__pb2.FraudEventResponse.FromString,
+                request_serializer=fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.SerializeToString,
+                response_deserializer=fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.FromString,
                 _registered_method=True)
         self.CheckRiskScoreFraud = channel.unary_unary(
                 '/fraud_detection.FraudDetectionService/CheckRiskScoreFraud',
-                request_serializer=fraud__detection__pb2.FraudEventRequest.SerializeToString,
-                response_deserializer=fraud__detection__pb2.FraudEventResponse.FromString,
+                request_serializer=fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.SerializeToString,
+                response_deserializer=fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.FromString,
                 _registered_method=True)
         self.FinalizeOrder = channel.unary_unary(
                 '/fraud_detection.FraudDetectionService/FinalizeOrder',
-                request_serializer=fraud__detection__pb2.FinalizeOrderRequest.SerializeToString,
-                response_deserializer=fraud__detection__pb2.FinalizeOrderResponse.FromString,
+                request_serializer=fraud__detection_dot_fraud__detection__pb2.FinalizeOrderRequest.SerializeToString,
+                response_deserializer=fraud__detection_dot_fraud__detection__pb2.FinalizeOrderResponse.FromString,
                 _registered_method=True)
         self.DeliverStepResult = channel.unary_unary(
                 '/fraud_detection.FraudDetectionService/DeliverStepResult',
-                request_serializer=fraud__detection__pb2.DeliverStepRequest.SerializeToString,
-                response_deserializer=fraud__detection__pb2.PipelineResponse.FromString,
+                request_serializer=fraud__detection_dot_fraud__detection__pb2.DeliverStepRequest.SerializeToString,
+                response_deserializer=fraud__detection_dot_fraud__detection__pb2.PipelineResponse.FromString,
                 _registered_method=True)
 
 
@@ -110,33 +110,33 @@ def add_FraudDetectionServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'InitOrder': grpc.unary_unary_rpc_method_handler(
                     servicer.InitOrder,
-                    request_deserializer=fraud__detection__pb2.InitOrderRequest.FromString,
-                    response_serializer=fraud__detection__pb2.InitOrderResponse.SerializeToString,
+                    request_deserializer=fraud__detection_dot_fraud__detection__pb2.InitOrderRequest.FromString,
+                    response_serializer=fraud__detection_dot_fraud__detection__pb2.InitOrderResponse.SerializeToString,
             ),
             'CheckCardFraud': grpc.unary_unary_rpc_method_handler(
                     servicer.CheckCardFraud,
-                    request_deserializer=fraud__detection__pb2.FraudEventRequest.FromString,
-                    response_serializer=fraud__detection__pb2.FraudEventResponse.SerializeToString,
+                    request_deserializer=fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.FromString,
+                    response_serializer=fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.SerializeToString,
             ),
             'CheckEmailFraud': grpc.unary_unary_rpc_method_handler(
                     servicer.CheckEmailFraud,
-                    request_deserializer=fraud__detection__pb2.FraudEventRequest.FromString,
-                    response_serializer=fraud__detection__pb2.FraudEventResponse.SerializeToString,
+                    request_deserializer=fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.FromString,
+                    response_serializer=fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.SerializeToString,
             ),
             'CheckRiskScoreFraud': grpc.unary_unary_rpc_method_handler(
                     servicer.CheckRiskScoreFraud,
-                    request_deserializer=fraud__detection__pb2.FraudEventRequest.FromString,
-                    response_serializer=fraud__detection__pb2.FraudEventResponse.SerializeToString,
+                    request_deserializer=fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.FromString,
+                    response_serializer=fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.SerializeToString,
             ),
             'FinalizeOrder': grpc.unary_unary_rpc_method_handler(
                     servicer.FinalizeOrder,
-                    request_deserializer=fraud__detection__pb2.FinalizeOrderRequest.FromString,
-                    response_serializer=fraud__detection__pb2.FinalizeOrderResponse.SerializeToString,
+                    request_deserializer=fraud__detection_dot_fraud__detection__pb2.FinalizeOrderRequest.FromString,
+                    response_serializer=fraud__detection_dot_fraud__detection__pb2.FinalizeOrderResponse.SerializeToString,
             ),
             'DeliverStepResult': grpc.unary_unary_rpc_method_handler(
                     servicer.DeliverStepResult,
-                    request_deserializer=fraud__detection__pb2.DeliverStepRequest.FromString,
-                    response_serializer=fraud__detection__pb2.PipelineResponse.SerializeToString,
+                    request_deserializer=fraud__detection_dot_fraud__detection__pb2.DeliverStepRequest.FromString,
+                    response_serializer=fraud__detection_dot_fraud__detection__pb2.PipelineResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -164,8 +164,8 @@ class FraudDetectionService(object):
             request,
             target,
             '/fraud_detection.FraudDetectionService/InitOrder',
-            fraud__detection__pb2.InitOrderRequest.SerializeToString,
-            fraud__detection__pb2.InitOrderResponse.FromString,
+            fraud__detection_dot_fraud__detection__pb2.InitOrderRequest.SerializeToString,
+            fraud__detection_dot_fraud__detection__pb2.InitOrderResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -191,8 +191,8 @@ class FraudDetectionService(object):
             request,
             target,
             '/fraud_detection.FraudDetectionService/CheckCardFraud',
-            fraud__detection__pb2.FraudEventRequest.SerializeToString,
-            fraud__detection__pb2.FraudEventResponse.FromString,
+            fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.SerializeToString,
+            fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -218,8 +218,8 @@ class FraudDetectionService(object):
             request,
             target,
             '/fraud_detection.FraudDetectionService/CheckEmailFraud',
-            fraud__detection__pb2.FraudEventRequest.SerializeToString,
-            fraud__detection__pb2.FraudEventResponse.FromString,
+            fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.SerializeToString,
+            fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -245,8 +245,8 @@ class FraudDetectionService(object):
             request,
             target,
             '/fraud_detection.FraudDetectionService/CheckRiskScoreFraud',
-            fraud__detection__pb2.FraudEventRequest.SerializeToString,
-            fraud__detection__pb2.FraudEventResponse.FromString,
+            fraud__detection_dot_fraud__detection__pb2.FraudEventRequest.SerializeToString,
+            fraud__detection_dot_fraud__detection__pb2.FraudEventResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -272,8 +272,8 @@ class FraudDetectionService(object):
             request,
             target,
             '/fraud_detection.FraudDetectionService/FinalizeOrder',
-            fraud__detection__pb2.FinalizeOrderRequest.SerializeToString,
-            fraud__detection__pb2.FinalizeOrderResponse.FromString,
+            fraud__detection_dot_fraud__detection__pb2.FinalizeOrderRequest.SerializeToString,
+            fraud__detection_dot_fraud__detection__pb2.FinalizeOrderResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -299,8 +299,8 @@ class FraudDetectionService(object):
             request,
             target,
             '/fraud_detection.FraudDetectionService/DeliverStepResult',
-            fraud__detection__pb2.DeliverStepRequest.SerializeToString,
-            fraud__detection__pb2.PipelineResponse.FromString,
+            fraud__detection_dot_fraud__detection__pb2.DeliverStepRequest.SerializeToString,
+            fraud__detection_dot_fraud__detection__pb2.PipelineResponse.FromString,
             options,
             channel_credentials,
             insecure,
