@@ -32,6 +32,7 @@ ALL_BOOKS = [
 class BooksDatabaseService(books_pb2_grpc.BooksDatabaseServicer):
     def __init__(self):
         self.stock = {title: 10 for title in ALL_BOOKS}
+        self.pending = {}  # order_id → {title: new_stock} staged during Prepare
         self.lock = threading.Lock()
 
     def Read(self, request, context):
@@ -73,6 +74,40 @@ class BooksDatabaseService(books_pb2_grpc.BooksDatabaseServicer):
             request.title, old, new_stock,
         )
         return books_pb2.WriteResponse(success=True)
+
+    def Prepare(self, request, context):
+        with self.lock:
+            staged = {}
+            for item in request.items:
+                current = self.stock.get(item.title, 0)
+                if current < item.quantity:
+                    logger.warning(
+                        "PREPARE %s VOTE=NO book=%r requested=%d available=%d",
+                        request.order_id, item.title, item.quantity, current,
+                    )
+                    return books_pb2.BooksPrepareResponse(
+                        vote=False,
+                        reason=f"Insufficient stock for '{item.title}': requested {item.quantity}, available {current}",
+                    )
+                staged[item.title] = current - item.quantity
+            self.pending[request.order_id] = staged
+        logger.info("PREPARE %s VOTE=YES staged=%s", request.order_id, staged)
+        return books_pb2.BooksPrepareResponse(vote=True)
+
+    def Commit(self, request, context):
+        with self.lock:
+            staged = self.pending.pop(request.order_id, None)
+            if staged:
+                for title, new_stock in staged.items():
+                    self.stock[title] = new_stock
+        logger.info("COMMIT %s applied=%s", request.order_id, staged)
+        return books_pb2.BooksCommitResponse(success=True)
+
+    def Abort(self, request, context):
+        with self.lock:
+            self.pending.pop(request.order_id, None)
+        logger.info("ABORT %s", request.order_id)
+        return books_pb2.BooksAbortResponse(success=True)
 
     def ListAvailableBooks(self, request, context):
         with self.lock:
@@ -127,3 +162,15 @@ class PrimaryReplica(BooksDatabaseService):
             self.stock[request.title] = new_stock
         self._replicate(request.title, new_stock)
         return books_pb2.WriteResponse(success=True)
+
+    def Commit(self, request, context):
+        with self.lock:
+            staged = self.pending.pop(request.order_id, None)
+            if staged:
+                for title, new_stock in staged.items():
+                    self.stock[title] = new_stock
+        if staged:
+            for title, new_stock in staged.items():
+                self._replicate(title, new_stock)
+        logger.info("COMMIT %s applied=%s", request.order_id, staged)
+        return books_pb2.BooksCommitResponse(success=True)

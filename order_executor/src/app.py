@@ -10,6 +10,9 @@ FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 
 
 
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+import requests as _requests
+
 from utils.pb.books_database import books_database_pb2 as books_pb2
 from utils.pb.books_database import books_database_pb2_grpc as books_pb2_grpc
 
@@ -18,6 +21,10 @@ from utils.pb.order_executor import order_executor_pb2_grpc as order_executor_gr
 
 from utils.pb.order_queue import order_queue_pb2 as order_queue
 from utils.pb.order_queue import order_queue_pb2_grpc as order_queue_grpc
+
+from utils.pb.payment import payment_pb2
+from utils.pb.payment import payment_pb2_grpc
+
 import grpc
 
 logging.basicConfig(
@@ -31,6 +38,8 @@ EXECUTOR_PORT = int(os.getenv("EXECUTOR_PORT", "50055"))
 ORDER_QUEUE_ADDR = os.getenv("ORDER_QUEUE_ADDR", "order_queue:50054")
 SERVICE_NAME = os.getenv("SERVICE_NAME", "order_executor")
 BOOKS_DB_ADDR = os.getenv("BOOKS_DB_ADDR", "books_db_1:50060")
+PAYMENT_ADDR = os.getenv("PAYMENT_ADDR", "payment:50056")
+ORCHESTRATOR_ADDR = os.getenv("ORCHESTRATOR_ADDR", "http://orchestrator:5000")
 
 ELECTION_TIMEOUT = 2.0
 HEARTBEAT_INTERVAL = 3.0
@@ -283,10 +292,22 @@ def heartbeat_monitor(election):
                 election.start_election()
 
 
+def _report_status(order_id, status, reason):
+    try:
+        _requests.post(
+            f"{ORCHESTRATOR_ADDR}/order_status",
+            json={"order_id": order_id, "status": status, "reason": reason},
+            timeout=2.0,
+        )
+    except Exception as e:
+        logger.warning("executor_id=? event=status_report_failed error=%s", e)
+
+
 def order_processing_loop(election):
-    """Leader dequeues orders from the queue and executes them."""
-    db_channel = grpc.insecure_channel(BOOKS_DB_ADDR)
-    db_stub = books_pb2_grpc.BooksDatabaseStub(db_channel)
+    """Leader dequeues orders and executes them using 2-phase commit."""
+    db_stub = books_pb2_grpc.BooksDatabaseStub(grpc.insecure_channel(BOOKS_DB_ADDR))
+    payment_stub = payment_pb2_grpc.PaymentServiceStub(grpc.insecure_channel(PAYMENT_ADDR))
+
     while True:
         time.sleep(DEQUEUE_INTERVAL)
 
@@ -294,73 +315,75 @@ def order_processing_loop(election):
             continue
 
         try:
-            channel = grpc.insecure_channel(ORDER_QUEUE_ADDR)
-            stub = order_queue_grpc.OrderQueueServiceStub(channel)
-            response = stub.Dequeue(
-                order_queue.DequeueRequest(),
-                timeout=3.0,
+            queue_stub = order_queue_grpc.OrderQueueServiceStub(
+                grpc.insecure_channel(ORDER_QUEUE_ADDR)
             )
-            channel.close()
+            response = queue_stub.Dequeue(order_queue.DequeueRequest(), timeout=3.0)
 
-            if response.ok:
-                items_str = ", ".join(
-                    f"{item.name} x{item.quantity}" for item in response.items
+            if not response.ok:
+                continue
+
+            order_id = response.order_id
+            items_str = ", ".join(
+                f"{item.name} x{item.quantity}" for item in response.items
+            )
+            logger.info(
+                "executor_id=%d event=order_dequeued order_id=%s purchaser=%s items=[%s]",
+                election.executor_id, order_id, response.purchaser_name, items_str,
+            )
+
+            # --- Phase 1: Prepare (parallel) ---
+            db_items = [
+                books_pb2.BookItem(title=item.name, quantity=item.quantity)
+                for item in response.items
+            ]
+
+            with _ThreadPoolExecutor(max_workers=2) as pool:
+                db_future = pool.submit(
+                    db_stub.Prepare,
+                    books_pb2.BooksPrepareRequest(order_id=order_id, items=db_items),
                 )
+                payment_future = pool.submit(
+                    payment_stub.Prepare,
+                    payment_pb2.PaymentPrepareRequest(
+                        order_id=order_id,
+                        credit_card_number=response.credit_card_number,
+                        credit_card_expiration=response.credit_card_expiration,
+                        credit_card_cvv=response.credit_card_cvv,
+                    ),
+                )
+                db_vote = db_future.result()
+                payment_vote = payment_future.result()
+
+            all_yes = db_vote.vote and payment_vote.ready
+            logger.info(
+                "executor_id=%d event=2pc_prepare order_id=%s db_vote=%s payment_ready=%s",
+                election.executor_id, order_id, db_vote.vote, payment_vote.ready,
+            )
+
+            # --- Phase 2: Commit or Abort ---
+            if all_yes:
+                db_stub.Commit(books_pb2.BooksCommitRequest(order_id=order_id))
+                payment_stub.Commit(payment_pb2.PaymentCommitRequest(order_id=order_id))
                 logger.info(
-                    "executor_id=%d event=order_executing order_id=%s "
-                    "purchaser=%s items=[%s]",
-                    election.executor_id,
-                    response.order_id,
-                    response.purchaser_name,
-                    items_str,
+                    "executor_id=%d event=2pc_commit order_id=%s status=completed",
+                    election.executor_id, order_id,
                 )
+                _report_status(order_id, "completed", "")
+            else:
+                reason = db_vote.reason if not db_vote.vote else "payment not ready"
+                db_stub.Abort(books_pb2.BooksAbortRequest(order_id=order_id))
+                payment_stub.Abort(payment_pb2.PaymentAbortRequest(order_id=order_id))
+                logger.warning(
+                    "executor_id=%d event=2pc_abort order_id=%s reason=%r",
+                    election.executor_id, order_id, reason,
+                )
+                _report_status(order_id, "aborted", reason)
 
-                success = True
-
-                for item in response.items:
-                    result = db_stub.DecrementStock(
-                        books_pb2.DecrementRequest(
-                            title=item.name,
-                            quantity=item.quantity,
-                        )
-                    )
-
-                    if not result.success:
-                        success = False
-                        available = db_stub.Read(
-                            books_pb2.ReadRequest(title=item.name)
-                        ).stock
-                        logger.warning(
-                            "executor_id=%d event=stock_failed book=%s requested=%d available=%d",
-                            election.executor_id,
-                            item.name,
-                            item.quantity,
-                            available,
-                        )
-
-                if success:
-                    logger.info(
-                        "executor_id=%d event=order_executed order_id=%s status=completed",
-                        election.executor_id,
-                        response.order_id,
-                    )
-                else:
-                    logger.warning(
-                        "executor_id=%d event=order_failed order_id=%s reason=insufficient_stock",
-                        election.executor_id,
-                        response.order_id,
-                    )
-                # logger.info(
-                #     "executor_id=%d event=order_executed order_id=%s "
-                #     "status=completed",
-                #     election.executor_id,
-                #     response.order_id,
-                # )
         except grpc.RpcError as e:
             logger.warning(
-                "executor_id=%d event=dequeue_failed error=%s",
-                election.executor_id,
-                str(e),
+                "executor_id=%d event=processing_failed error=%s",
+                election.executor_id, str(e),
             )
 
 

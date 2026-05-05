@@ -71,6 +71,8 @@ BOOKS_DB_ADDR = os.getenv("BOOKS_DB_ADDR", "books_db_1:50060")
 books_db_channel = grpc.insecure_channel(BOOKS_DB_ADDR)
 books_db_stub = books_pb2_grpc.BooksDatabaseStub(books_db_channel)
 
+order_statuses = {}  # order_id → {status, reason}
+
 # transaction_verification_channel = grpc.insecure_channel(TRANSACTION_VERIFICATION_ADDR)
 # transaction_verification_stub = (
 #     transaction_verification_grpc.TransactionVerificationServiceStub(
@@ -383,6 +385,37 @@ def _enqueue_order(checkout_data, suggested_books, correlation_id):
     return response.ok
 
 
+@app.route("/order_status/<order_id>", methods=["GET"])
+def get_order_status(order_id):
+    status = order_statuses.get(order_id)
+    if status is None:
+        return {"status": "pending"}, 202
+    return status
+
+
+@app.route("/order_status", methods=["POST"])
+def set_order_status():
+    data = request.get_json(silent=True) or {}
+    order_id = data.get("order_id")
+    if order_id:
+        order_statuses[order_id] = {
+            "status": data.get("status"),
+            "reason": data.get("reason", ""),
+        }
+        logger.info("event=order_status_updated order_id=%s status=%s", order_id, data.get("status"))
+    return {"ok": True}
+
+
+@app.route("/books", methods=["GET"])
+def get_books():
+    try:
+        response = books_db_stub.ListAvailableBooks(books_pb2.Empty())
+        return {"books": list(response.books)}
+    except grpc.RpcError as error:
+        logger.warning("event=fetch_books_failed error=%s", error.details())
+        return {"books": []}
+
+
 @app.route("/checkout", methods=["POST"])
 def checkout():
     request_data = request.get_json(silent=True)
@@ -468,6 +501,7 @@ def checkout():
         logger.warning("event=fetch_available_books_failed cid=%s", correlation_id)
 
     return {
+        "orderId": correlation_id,
         "status": "Order Approved",
         "reasons": [],
         "suggestedBooks": available_books,

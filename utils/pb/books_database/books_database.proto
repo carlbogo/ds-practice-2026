@@ -6,9 +6,10 @@ service BooksDatabase {
   rpc DecrementStock (DecrementRequest) returns (WriteResponse);
   rpc IncrementStock (IncrementRequest) returns (WriteResponse);
   rpc ListAvailableBooks (Empty) returns (AvailableBooksResponse);
-
+  rpc Prepare (BooksPrepareRequest) returns (BooksPrepareResponse);
+  rpc Commit (BooksCommitRequest) returns (BooksCommitResponse);
+  rpc Abort (BooksAbortRequest) returns (BooksAbortResponse);
 }
-
 
 message Empty {}
 
@@ -40,5 +41,36 @@ message IncrementRequest {
 }
 
 message WriteResponse {
+  bool success = 1;
+}
+
+message BookItem {
+  string title = 1;
+  int32 quantity = 2;
+}
+
+message BooksPrepareRequest {
+  string order_id = 1;
+  repeated BookItem items = 2;
+}
+
+message BooksPrepareResponse {
+  bool vote = 1;
+  string reason = 2;
+}
+
+message BooksCommitRequest {
+  string order_id = 1;
+}
+
+message BooksCommitResponse {
+  bool success = 1;
+}
+
+message BooksAbortRequest {
+  string order_id = 1;
+}
+
+message BooksAbortResponse {
   bool success = 1;
 }

@@ -12,10 +12,19 @@
             <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">Checkout Page</h1>
 
             <div class="mb-6">
-                <h2 class="text-lg font-semibold text-gray-700">Items</h2>
-                <ul id="itemList" class="list-none p-0 mt-2 space-y-2">
-                    <!-- Items will be dynamically rendered here -->
-                </ul>
+                <h2 class="text-lg font-semibold text-gray-700 mb-2">Book &amp; Quantity</h2>
+                <div class="flex flex-wrap items-center gap-2">
+                    <select id="bookSelect" class="min-w-0 flex-1 border border-gray-300 rounded-lg p-2 truncate" style="min-width: 8rem;">
+                        <option value="">Loading books...</option>
+                    </select>
+                    <div class="flex items-center border border-gray-300 rounded-lg overflow-hidden shrink-0">
+                        <button type="button" onclick="changeQty(-1)"
+                            class="w-10 h-10 text-xl font-bold bg-gray-100 hover:bg-gray-200 text-gray-700">−</button>
+                        <span id="qtyDisplay" class="w-8 text-center font-medium">1</span>
+                        <button type="button" onclick="changeQty(1)"
+                            class="w-10 h-10 text-xl font-bold bg-gray-100 hover:bg-gray-200 text-gray-700">+</button>
+                    </div>
+                </div>
             </div>
 
             <div class="mb-4">
@@ -58,34 +67,23 @@
                     <option value="Next-Day">Next-Day</option>
                 </select>
             </div>
+            <!-- Book Suggestions (commented out until suggestions service is re-enabled)
             <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-2">
                     Book Suggestions
                 </label>
-
                 <div class="flex items-center space-x-6">
                     <label class="flex items-center">
-                        <input
-                                type="radio"
-                                name="suggestionMode"
-                                value="author"
-                                checked
-                                class="mr-2"
-                        >
+                        <input type="radio" name="suggestionMode" value="author" checked class="mr-2">
                         By Author
                     </label>
-
                     <label class="flex items-center">
-                        <input
-                                type="radio"
-                                name="suggestionMode"
-                                value="ai"
-                                class="mr-2"
-                        >
+                        <input type="radio" name="suggestionMode" value="ai" class="mr-2">
                         By AI
                     </label>
                 </div>
             </div>
+            -->
             <button type="submit" class="w-full bg-blue-600 text-white font-medium py-2 px-4 rounded-lg hover:bg-blue-700">Submit Order</button>
         </form>
 
@@ -104,23 +102,38 @@
                 .replaceAll("'", "&#039;");
         }
 
-        const items = [
-            { name: "Book A", quantity: 1 },
-            { name: "Book B", quantity: 2 }
-        ];
+        let quantity = 1;
 
-        const itemListElement = document.getElementById('itemList');
-        items.forEach(item => {
-            const li = document.createElement('li');
-            li.textContent = `${item.name} - Quantity: ${item.quantity}`;
-            li.className = "bg-gray-100 p-3 rounded-lg";
-            itemListElement.appendChild(li);
-        });
+        async function loadBooks() {
+            try {
+                const response = await fetch('http://localhost:8081/books');
+                const data = await response.json();
+                const select = document.getElementById('bookSelect');
+                select.innerHTML = data.books.length
+                    ? data.books.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')
+                    : '<option value="">No books available</option>';
+            } catch (e) {
+                document.getElementById('bookSelect').innerHTML = '<option value="">Failed to load books</option>';
+            }
+        }
+
+        function changeQty(delta) {
+            quantity = Math.max(1, quantity + delta);
+            document.getElementById('qtyDisplay').textContent = quantity;
+        }
+
+        loadBooks();
 
         document.getElementById('checkoutForm').addEventListener('submit', async function(event) {
             event.preventDefault();
 
             const formData = new FormData(event.target);
+            const selectedBook = document.getElementById('bookSelect').value;
+            if (!selectedBook) {
+                alert('Please select a book.');
+                return;
+            }
+            const items = [{ name: selectedBook, quantity }];
             const data = {
                 user: {
                     name: formData.get('name'),
@@ -153,71 +166,40 @@
 
                 const result = await response.json();
                 const responseDiv = document.getElementById('response');
+                const orderId = result.orderId;
 
-                if (response.ok) {
-                    if (result.status === "Order Approved") {
-                        responseDiv.className =
-                            "mt-6 p-6 border rounded-lg bg-green-50 text-green-800";
-
-                        const suggestedBooksHtml = (result.suggestedBooks || [])
-                            .map(book => `<li>${escapeHtml(book)}</li>`)
-                            .join('');
-
-                        responseDiv.innerHTML = `
-                        <h2 class="text-xl font-semibold mb-2">✅ Order Approved</h2>
-                        <p class="mb-3">Your order has been successfully processed.</p>
-
-                        <h3 class="font-semibold mt-4 mb-2">📚 Suggested Books</h3>
-                        <ul class="list-disc pl-6 space-y-1">
-                            ${suggestedBooksHtml}
-                        </ul>
-                    `;
-                    }else if (result.status === "Order Rejected") {
-                        const reasons = Array.isArray(result.reasons) ? result.reasons : [];
-
-                        const reasonsHtml = reasons
-                            .map(r => `<li>${escapeHtml(r)}</li>`)
-                            .join('');
-
-                        responseDiv.className =
-                            "mt-6 p-6 border rounded-lg bg-red-50 text-red-800";
-
-                        responseDiv.innerHTML = `
-                            <h2 class="text-xl font-semibold mb-3">❌ Order Rejected</h2>
-                            <p class="mb-2">Please fix the following issues:</p>
-                            <ul class="list-disc pl-6 space-y-1">
-                            ${reasonsHtml}
-                            </ul>
-                        `;
-                    }
-                }
-                else {
-                    const reasons = Array.isArray(result.reasons) ? result.reasons : [];
-
-                    if (result.status === "Order Rejected" && reasons.length > 0) {
-                        const reasonsHtml = reasons
-                            .map(r => `<li>${escapeHtml(r)}</li>`)
-                            .join('');
-
-                        responseDiv.className =
-                            "mt-6 p-6 border rounded-lg bg-red-50 text-red-800";
-
-                        responseDiv.innerHTML = `
-                            <h2 class="text-xl font-semibold mb-3">❌ Order Rejected</h2>
-                            <p class="mb-2">Please fix the following issues:</p>
-                            <ul class="list-disc pl-6 space-y-1">
-                            ${reasonsHtml}
-                            </ul>
-                        `;
-                    } else {
-                        const errorMessage = result?.error?.message || "Request failed";
-                        responseDiv.textContent = `Error: ${errorMessage}`;
-                        responseDiv.className = "mt-6 p-4 border rounded-lg bg-red-100 text-red-700";
-                    }
-                }
-
+                responseDiv.className = "mt-6 p-6 border rounded-lg bg-yellow-50 text-yellow-800";
+                responseDiv.innerHTML = `<h2 class="text-xl font-semibold mb-2">⏳ Order Processing...</h2>
+                    <p>Waiting for confirmation.</p>`;
                 responseDiv.style.display = 'block';
-                // scroll to the bottom of the page
+                window.scrollTo(0, document.body.scrollHeight);
+
+                // Poll for 2PC outcome
+                const deadline = Date.now() + 10000;
+                while (Date.now() < deadline) {
+                    await new Promise(r => setTimeout(r, 500));
+                    const statusResp = await fetch(`http://localhost:8081/order_status/${orderId}`);
+                    const statusData = await statusResp.json();
+
+                    if (statusData.status === 'completed') {
+                        responseDiv.className = "mt-6 p-6 border rounded-lg bg-green-50 text-green-800";
+                        responseDiv.innerHTML = `<h2 class="text-xl font-semibold mb-2">✅ Order Completed</h2>
+                            <p>Your order has been successfully processed.</p>`;
+                        break;
+                    } else if (statusData.status === 'aborted') {
+                        responseDiv.className = "mt-6 p-6 border rounded-lg bg-red-50 text-red-800";
+                        responseDiv.innerHTML = `<h2 class="text-xl font-semibold mb-2">❌ Order Failed</h2>
+                            <p>${escapeHtml(statusData.reason || 'Order could not be completed.')}</p>`;
+                        break;
+                    }
+                }
+
+                if (responseDiv.innerHTML.includes('Processing')) {
+                    responseDiv.className = "mt-6 p-6 border rounded-lg bg-gray-50 text-gray-700";
+                    responseDiv.innerHTML = `<h2 class="text-xl font-semibold mb-2">⚠️ Status Unknown</h2>
+                        <p>Order was queued but confirmation timed out.</p>`;
+                }
+
                 window.scrollTo(0, document.body.scrollHeight);
             } catch (error) {
                 const responseDiv = document.getElementById('response');

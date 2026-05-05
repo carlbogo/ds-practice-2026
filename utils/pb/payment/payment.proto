@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+service PaymentService {
+  rpc Prepare (PaymentPrepareRequest) returns (PaymentPrepareResponse);
+  rpc Commit (PaymentCommitRequest) returns (PaymentCommitResponse);
+  rpc Abort (PaymentAbortRequest) returns (PaymentAbortResponse);
+}
+
+message PaymentPrepareRequest {
+  string order_id = 1;
+  string credit_card_number = 2;
+  string credit_card_expiration = 3;
+  string credit_card_cvv = 4;
+}
+
+message PaymentPrepareResponse {
+  bool ready = 1;
+}
+
+message PaymentCommitRequest {
+  string order_id = 1;
+}
+
+message PaymentCommitResponse {
+  bool success = 1;
+}
+
+message PaymentAbortRequest {
+  string order_id = 1;
+}
+
+message PaymentAbortResponse {
+  bool aborted = 1;
+}
