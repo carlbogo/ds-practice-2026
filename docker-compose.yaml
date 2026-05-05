@@ -124,7 +124,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - 50060:50060
+      - 55060:50060
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py
@@ -141,7 +141,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - 50061:50061
+      - 55061:50061
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py
@@ -157,7 +157,7 @@ services:
       context: ./
       dockerfile: ./books_database/Dockerfile
     ports:
-      - 50062:50062
+      - 55062:50062
     environment:
       - PYTHONUNBUFFERED=TRUE
       - PYTHONFILE=/app/books_database/src/app.py

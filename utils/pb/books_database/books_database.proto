@@ -4,6 +4,7 @@ service BooksDatabase {
   rpc Read (ReadRequest) returns (ReadResponse);
   rpc Write (WriteRequest) returns (WriteResponse);
   rpc DecrementStock (DecrementRequest) returns (WriteResponse);
+  rpc IncrementStock (IncrementRequest) returns (WriteResponse);
   rpc ListAvailableBooks (Empty) returns (AvailableBooksResponse);
 
 }
@@ -29,6 +30,11 @@ message WriteRequest {
 }
 
 message DecrementRequest {
+  string title = 1;
+  int32 quantity = 2;
+}
+
+message IncrementRequest {
   string title = 1;
   int32 quantity = 2;
 }

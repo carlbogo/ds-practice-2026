@@ -3,9 +3,9 @@
 import grpc
 import warnings
 
-from utils.pb.books_database import books_database_pb2 as books__database__pb2
+from utils.pb.books_database import books_database_pb2 as utils_dot_pb_dot_books__database_dot_books__database__pb2
 
-GRPC_GENERATED_VERSION = '1.78.0'
+GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in books_database_pb2_grpc.py depends on'
+        + ' but the generated code in utils/pb/books_database/books_database_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -36,23 +36,28 @@ class BooksDatabaseStub(object):
         """
         self.Read = channel.unary_unary(
                 '/BooksDatabase/Read',
-                request_serializer=books__database__pb2.ReadRequest.SerializeToString,
-                response_deserializer=books__database__pb2.ReadResponse.FromString,
+                request_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.ReadRequest.SerializeToString,
+                response_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.ReadResponse.FromString,
                 _registered_method=True)
         self.Write = channel.unary_unary(
                 '/BooksDatabase/Write',
-                request_serializer=books__database__pb2.WriteRequest.SerializeToString,
-                response_deserializer=books__database__pb2.WriteResponse.FromString,
+                request_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteRequest.SerializeToString,
+                response_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.FromString,
                 _registered_method=True)
         self.DecrementStock = channel.unary_unary(
                 '/BooksDatabase/DecrementStock',
-                request_serializer=books__database__pb2.DecrementRequest.SerializeToString,
-                response_deserializer=books__database__pb2.WriteResponse.FromString,
+                request_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.DecrementRequest.SerializeToString,
+                response_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.FromString,
+                _registered_method=True)
+        self.IncrementStock = channel.unary_unary(
+                '/BooksDatabase/IncrementStock',
+                request_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.IncrementRequest.SerializeToString,
+                response_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.FromString,
                 _registered_method=True)
         self.ListAvailableBooks = channel.unary_unary(
                 '/BooksDatabase/ListAvailableBooks',
-                request_serializer=books__database__pb2.Empty.SerializeToString,
-                response_deserializer=books__database__pb2.AvailableBooksResponse.FromString,
+                request_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.Empty.SerializeToString,
+                response_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.AvailableBooksResponse.FromString,
                 _registered_method=True)
 
 
@@ -77,6 +82,12 @@ class BooksDatabaseServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def IncrementStock(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListAvailableBooks(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -88,23 +99,28 @@ def add_BooksDatabaseServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Read': grpc.unary_unary_rpc_method_handler(
                     servicer.Read,
-                    request_deserializer=books__database__pb2.ReadRequest.FromString,
-                    response_serializer=books__database__pb2.ReadResponse.SerializeToString,
+                    request_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.ReadRequest.FromString,
+                    response_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.ReadResponse.SerializeToString,
             ),
             'Write': grpc.unary_unary_rpc_method_handler(
                     servicer.Write,
-                    request_deserializer=books__database__pb2.WriteRequest.FromString,
-                    response_serializer=books__database__pb2.WriteResponse.SerializeToString,
+                    request_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteRequest.FromString,
+                    response_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.SerializeToString,
             ),
             'DecrementStock': grpc.unary_unary_rpc_method_handler(
                     servicer.DecrementStock,
-                    request_deserializer=books__database__pb2.DecrementRequest.FromString,
-                    response_serializer=books__database__pb2.WriteResponse.SerializeToString,
+                    request_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.DecrementRequest.FromString,
+                    response_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.SerializeToString,
+            ),
+            'IncrementStock': grpc.unary_unary_rpc_method_handler(
+                    servicer.IncrementStock,
+                    request_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.IncrementRequest.FromString,
+                    response_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.SerializeToString,
             ),
             'ListAvailableBooks': grpc.unary_unary_rpc_method_handler(
                     servicer.ListAvailableBooks,
-                    request_deserializer=books__database__pb2.Empty.FromString,
-                    response_serializer=books__database__pb2.AvailableBooksResponse.SerializeToString,
+                    request_deserializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.Empty.FromString,
+                    response_serializer=utils_dot_pb_dot_books__database_dot_books__database__pb2.AvailableBooksResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -132,8 +148,8 @@ class BooksDatabase(object):
             request,
             target,
             '/BooksDatabase/Read',
-            books__database__pb2.ReadRequest.SerializeToString,
-            books__database__pb2.ReadResponse.FromString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.ReadRequest.SerializeToString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.ReadResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -159,8 +175,8 @@ class BooksDatabase(object):
             request,
             target,
             '/BooksDatabase/Write',
-            books__database__pb2.WriteRequest.SerializeToString,
-            books__database__pb2.WriteResponse.FromString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteRequest.SerializeToString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -186,8 +202,35 @@ class BooksDatabase(object):
             request,
             target,
             '/BooksDatabase/DecrementStock',
-            books__database__pb2.DecrementRequest.SerializeToString,
-            books__database__pb2.WriteResponse.FromString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.DecrementRequest.SerializeToString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def IncrementStock(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/BooksDatabase/IncrementStock',
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.IncrementRequest.SerializeToString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.WriteResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -213,8 +256,8 @@ class BooksDatabase(object):
             request,
             target,
             '/BooksDatabase/ListAvailableBooks',
-            books__database__pb2.Empty.SerializeToString,
-            books__database__pb2.AvailableBooksResponse.FromString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.Empty.SerializeToString,
+            utils_dot_pb_dot_books__database_dot_books__database__pb2.AvailableBooksResponse.FromString,
             options,
             channel_credentials,
             insecure,

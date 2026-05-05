@@ -321,17 +321,21 @@ def order_processing_loop(election):
                     result = db_stub.DecrementStock(
                         books_pb2.DecrementRequest(
                             title=item.name,
-                            quantity=item.quantity
+                            quantity=item.quantity,
                         )
                     )
 
                     if not result.success:
                         success = False
+                        available = db_stub.Read(
+                            books_pb2.ReadRequest(title=item.name)
+                        ).stock
                         logger.warning(
-                            "executor_id=%d event=stock_failed book=%s requested=%d",
+                            "executor_id=%d event=stock_failed book=%s requested=%d available=%d",
                             election.executor_id,
                             item.name,
                             item.quantity,
+                            available,
                         )
 
                 if success:
